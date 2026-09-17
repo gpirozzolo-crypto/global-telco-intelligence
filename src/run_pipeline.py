@@ -10,6 +10,7 @@ from ingest.arcep_inspect import inspect_arcep_workbooks
 from ingest.arcep_load import load_arcep
 from ingest.base import context
 from ingest.probe import SOURCES, probe
+from ingest.regulator_inspect import inspect_agcom, inspect_bnetza, inspect_cnmc
 
 
 def client():
@@ -29,16 +30,17 @@ def probes():
 def arcep():
     result=discover_arcep(context()); print(json.dumps({"source":"ARCEP_OBS","resources":len(result["resources"]),"dataset_last_modified":result["dataset_last_modified"]}))
 
-def arcep_inspect():
-    print(json.dumps({"source":"ARCEP_OBS",**inspect_arcep_workbooks(context())}))
-
-def arcep_load():
-    print(json.dumps({"source":"ARCEP_OBS",**load_arcep(context())}))
+def arcep_inspect(): print(json.dumps({"source":"ARCEP_OBS",**inspect_arcep_workbooks(context())}))
+def arcep_load(): print(json.dumps({"source":"ARCEP_OBS",**load_arcep(context())}))
+def agcom_inspect(): print(json.dumps({"source":"AGCOM_OBS",**inspect_agcom(context())}))
+def cnmc_inspect(): print(json.dumps({"source":"CNMC_TELCO",**inspect_cnmc(context())}))
+def bnetza_inspect(): print(json.dumps({"source":"BNetzA_TK",**inspect_bnetza(context())}))
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--source",default="healthcheck",choices=["healthcheck","probes","arcep","arcep-inspect","arcep-load"])
-    args=parser.parse_args()
-    {"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load}[args.source]()
+    funcs={"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load,
+           "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"bnetza-inspect":bnetza_inspect}
+    parser.add_argument("--source",default="healthcheck",choices=list(funcs))
+    args=parser.parse_args(); funcs[args.source]()
 
 if __name__ == "__main__": main()
