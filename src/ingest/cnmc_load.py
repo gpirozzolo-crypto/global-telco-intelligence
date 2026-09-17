@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from datetime import date
 
 from .base import PipelineContext, finish_run, one, start_run, utcnow
@@ -11,22 +12,24 @@ GENERAL_RESOURCE = "73e962dc-ab8f-4994-81c2-352146e1f7c0"
 MARKETS_URL = "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-de-mercados/telecomunicaciones-3"
 GENERAL_URL = "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-generales/telecomunicaciones"
 
-# Conservative country-total mappings. Operator rows and dimensional breakdowns are excluded.
-MARKET_RULES = [
-    ("MOBILE_SUBS", "Telefonía móvil", "Líneas", None, "lineas_o_accesos"),
-    ("FIXED_BB_SUBS", "Banda ancha fija minorista", "Líneas", None, "lineas_o_accesos"),
-    ("FTTH_SUBS", "Banda ancha fija minorista", "Líneas", "FTTH", "lineas_o_accesos"),
-    ("FTTH_HOMES_PASSED", "Red de distribución", "Accesos", "FTTH", "lineas_o_accesos"),
-    ("MOBILE_REVENUE", "Telefonía móvil", "Ingresos", None, "ingresos"),
-    ("FIXED_REVENUE", "Banda ancha fija minorista", "Ingresos", None, "ingresos"),
-    ("MOBILE_DATA_TRAFFIC", "Banda Ancha móvil", "Tráfico - datos", None, "trafico_de_datos"),
+# CNMC market data mixes country-total rows, dimensional rows and operator rows.
+# We prefer an explicit country-total row when it is unique; otherwise we sum a
+# single, mutually-exclusive dimension only when no operator is present.
+RULES = [
+    ("MOBILE_SUBS", "Telefonía móvil", "Líneas", "lineas_o_accesos", None),
+    ("FIXED_BB_SUBS", "Banda ancha fija minorista", "Líneas", "lineas_o_accesos", None),
+    ("FTTH_SUBS", "Banda ancha fija minorista", "Líneas", "lineas_o_accesos", {"tecnologia_de_acceso":"FTTH"}),
+    ("FTTH_HOMES_PASSED", "Red de distribución", "Accesos", "lineas_o_accesos", {"tecnologia_de_acceso":"FTTH"}),
+    ("MOBILE_REVENUE", "Telefonía móvil", "Ingresos", "ingresos", None),
+    ("FIXED_REVENUE", "Banda ancha fija minorista", "Ingresos", "ingresos", None),
+    ("MOBILE_DATA_TRAFFIC", "Banda Ancha móvil", "Tráfico - datos", "trafico_de_datos", None),
 ]
 
 DIMENSIONS = ["tipo_de_mercado","tipo_de_cliente","segmento","tipo_de_trafico","tipo_de_contrato","tipo_de_linea",
-              "tipo_de_mensaje","tipo_de_trafico_de_mensaje","velocidad_baf","tipo_de_oferta","tipo_de_tarifa",
-              "tipo_de_ce_minorista","tipo_de_circuito","tipo_de_emision","tipo_de_operador","tipo_de_medio",
+              "tipo_de_mensaje","tipo_de_trafico_de_mensaje","tecnologia_de_acceso","velocidad_baf","tipo_de_oferta",
+              "tipo_de_tarifa","tipo_de_ce_minorista","tipo_de_circuito","tipo_de_emision","tipo_de_operador","tipo_de_medio",
               "tipo_de_publicidad","tipo_de_contratacion","tipo_servicio_audiovisual_mayorista","tipo_de_ba_may",
-              "tipo_de_interconexion","tipo_de_tarificacion_en_interconexion","tipo_de_ambito"]
+              "tipo_de_interconexion","tipo_de_tarificacion_en_interconexion","tipo_de_ambito","tipo_de_acceso_de_infraestructuras"]
 
 def _na(v): return v in (None, "", "N/A")
 
@@ -59,63 +62,84 @@ def _upsert_obs(ctx,p):
     if q: ctx.db.table("observations").update(p).eq("id",q[0]["id"]).execute()
     else: ctx.db.table("observations").insert(p).execute()
 
-def _is_total(r, tech):
-    if not _na(r.get("operador")): return False
-    if tech is None and not _na(r.get("tecnologia_de_acceso")): return False
-    if tech is not None and r.get("tecnologia_de_acceso") != tech: return False
-    if r.get("servicio")=="Red de distribución" and r.get("tipo_de_acceso_de_infraestructuras") not in ("Acceso instalado",None,"N/A"): return False
-    return all(_na(r.get(d)) for d in DIMENSIONS)
+def _num(v):
+    try: return float(v)
+    except (TypeError,ValueError): return None
 
-def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rec, code, indicator, field, value):
-    unit=rec.get("unidades") or kpi["unit"]
+def _matches(r, service, concept, filters):
+    if r.get("servicio") != service or r.get("concepto") != concept or not _na(r.get("operador")): return False
+    return all(r.get(k)==v for k,v in (filters or {}).items())
+
+def _country_total(rows, field, filters):
+    # Remove dimensions fixed by the KPI definition (e.g. FTTH technology).
+    fixed=set((filters or {}).keys())
+    dims=[d for d in DIMENSIONS if d not in fixed]
+    direct=[r for r in rows if all(_na(r.get(d)) for d in dims) and _num(r.get(field)) is not None]
+    if len(direct)==1:
+        return _num(direct[0][field]), [direct[0]], "direct_total"
+    # Some CNMC totals retain tipo_de_mercado. Accept a unique row after
+    # ignoring that dimension, but never sum retail+wholesale into one KPI.
+    relaxed=[r for r in rows if all(_na(r.get(d)) for d in dims if d!="tipo_de_mercado") and _num(r.get(field)) is not None]
+    if len(relaxed)==1:
+        return _num(relaxed[0][field]), [relaxed[0]], "unique_market_total"
+    # If no total exists, aggregate only one populated dimension at a time.
+    for dim in dims:
+        candidates=[r for r in rows if not _na(r.get(dim)) and all(_na(r.get(d)) for d in dims if d!=dim) and _num(r.get(field)) is not None]
+        labels=[str(r.get(dim)) for r in candidates]
+        if len(candidates)>=2 and len(labels)==len(set(labels)):
+            return sum(_num(r[field]) for r in candidates), candidates, f"sum:{dim}"
+    return None, [], None
+
+def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, code, indicator, field, value, method):
+    rec=rows[0]; unit=rec.get("unidades") or kpi["unit"]
     numeric=value*1_000_000 if "Millones de euros" in str(unit) else value
+    period=_period(rec.get("trimestre"))
+    payload={"resource_id":resource,"aggregation_method":method,"record_ids":[r.get("_id") for r in rows],"records":rows}
     raw={"ingestion_run_id":run_id,"source_id":source_id,"country_id":country["id"],"operator_id":None,
-         "source_indicator":indicator,"period_date":_period(rec.get("trimestre")),"frequency":"quarterly","value_text":str(rec.get(field)),
+         "source_indicator":indicator,"period_date":period,"frequency":"quarterly","value_text":str(value),
          "value_numeric":value,"unit_raw":unit,"currency_raw":"EUR" if "euros" in str(unit).lower() else None,
-         "source_url":source_url,"retrieved_at":utcnow(),"payload":{"resource_id":resource,"record":rec},
-         "source_record_key":f"{resource}:{rec.get('_id')}:{code}"}
+         "source_url":source_url,"retrieved_at":utcnow(),"payload":payload,
+         "source_record_key":f"{resource}:{period}:{code}"}
     raw_id=_upsert_raw(ctx,raw)
-    obs={"kpi_id":kpi["id"],"country_id":country["id"],"operator_id":None,"period_date":raw["period_date"],
-         "frequency":"quarterly","value":numeric,"unit":kpi["unit"],"currency_code":"EUR" if "REVENUE" in code else None,
-         "source_id":source_id,"raw_observation_id":raw_id,"definition_version":kpi["definition_version"],"quality_flag":"ok",
-         "retrieved_at":utcnow(),"quality_notes":f"CNMC country total: {indicator}"}
+    obs={"kpi_id":kpi["id"],"country_id":country["id"],"operator_id":None,"period_date":period,"frequency":"quarterly",
+         "value":numeric,"unit":kpi["unit"],"currency_code":"EUR" if "REVENUE" in code else None,"source_id":source_id,
+         "raw_observation_id":raw_id,"definition_version":kpi["definition_version"],"quality_flag":"ok","retrieved_at":utcnow(),
+         "quality_notes":f"CNMC country total ({method}): {indicator}"}
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v2"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v3"})
     country=one(ctx.db,"countries","iso3","ESP")
-    codes={r[0] for r in MARKET_RULES}|{"TELCO_REVENUE","CAPEX"}
+    codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
-    read=written=0; matched={}
+    read=written=0; matched={}; skipped={}
     try:
         markets=_records(ctx,MARKETS_RESOURCE); general=_records(ctx,GENERAL_RESOURCE); read=len(markets)+len(general)
-        for rec in markets:
-            if not _period(rec.get("trimestre")): continue
-            for code,service,concept,tech,field in MARKET_RULES:
-                if rec.get("servicio")!=service or rec.get("concepto")!=concept or not _is_total(rec,tech): continue
-                val=rec.get(field)
-                try: val=float(val)
-                except (TypeError,ValueError): continue
-                indicator=f"{service} | {concept}" + (f" | {tech}" if tech else "")
-                _write(ctx,run_id,source_id,country,kpis[code],MARKETS_RESOURCE,MARKETS_URL,rec,code,indicator,field,val)
+        periods=sorted({_period(r.get("trimestre")) for r in markets if _period(r.get("trimestre"))})
+        for code,service,concept,field,filters in RULES:
+            for period in periods:
+                rows=[r for r in markets if _period(r.get("trimestre"))==period and _matches(r,service,concept,filters)]
+                value,used,method=_country_total(rows,field,filters)
+                if value is None:
+                    skipped[code]=skipped.get(code,0)+1; continue
+                indicator=f"{service} | {concept}" + (" | "+";".join(f"{a}={b}" for a,b in filters.items()) if filters else "")
+                _write(ctx,run_id,source_id,country,kpis[code],MARKETS_RESOURCE,MARKETS_URL,used,code,indicator,field,value,method)
                 written+=1; matched[code]=matched.get(code,0)+1
-        # General dataset: total sector revenue/investment, excluding operator rows.
-        for rec in general:
-            if not _period(rec.get("trimestre")) or not _na(rec.get("operador")): continue
-            concept=rec.get("concepto")
-            if concept not in ("Ingresos","Inversión","Inversiones"): continue
-            if not _na(rec.get("tipo_de_ingreso")) or not _na(rec.get("tipo_de_paquete")): continue
-            code="TELCO_REVENUE" if concept=="Ingresos" else "CAPEX"
-            field="ingresos"
-            val=rec.get(field)
-            try: val=float(val)
-            except (TypeError,ValueError): continue
-            indicator=f"Datos generales | {concept} | {rec.get('tipo_de_mercado') or 'total'}"
-            _write(ctx,run_id,source_id,country,kpis[code],GENERAL_RESOURCE,GENERAL_URL,rec,code,indicator,field,val)
-            written+=1; matched[code]=matched.get(code,0)+1
-        meta={"collector":"cnmc_quarterly_load_v2","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched}
+        # Total telecom revenue: sum the mutually exclusive ingreso categories
+        # across retail and wholesale; operator rows are excluded.
+        for period in sorted({_period(r.get("trimestre")) for r in general if _period(r.get("trimestre"))}):
+            rows=[r for r in general if _period(r.get("trimestre"))==period and r.get("concepto")=="Ingresos" and _na(r.get("operador"))
+                  and not _na(r.get("tipo_de_ingreso")) and _na(r.get("tipo_de_paquete")) and _num(r.get("ingresos")) is not None]
+            # Each tipo_de_ingreso belongs to one market; duplicates would make the aggregate unsafe.
+            keys=[(r.get("tipo_de_mercado"),r.get("tipo_de_ingreso")) for r in rows]
+            if rows and len(keys)==len(set(keys)):
+                value=sum(_num(r["ingresos"]) for r in rows)
+                _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
+                       "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
+                written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
+        meta={"collector":"cnmc_quarterly_load_v3","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
-        return {"rows_read":read,"rows_written":written,"matched":matched}
+        return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v2","matched":matched}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v3","matched":matched,"skipped":skipped}); raise
