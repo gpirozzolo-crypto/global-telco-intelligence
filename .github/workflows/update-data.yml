@@ -30,3 +30,6 @@ jobs:
       - name: Discover ARCEP resources
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep
+      - name: Inspect ARCEP workbooks
+        env: *supabase_env
+        run: python src/run_pipeline.py --source arcep-inspect
