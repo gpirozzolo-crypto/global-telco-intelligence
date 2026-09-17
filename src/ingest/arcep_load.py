@@ -9,7 +9,6 @@ from openpyxl import load_workbook
 from .arcep import DATASET_API
 from .base import PipelineContext, finish_run, one, start_run, utcnow
 
-# Conservative aliases: load only rows whose meaning is unambiguous.
 ALIASES = {
     "CAPEX": ["Investment during the year (*)"],
     "MOBILE_SUBS": ["Total number of SIM cards (MtoM cards excluded)"],
@@ -23,7 +22,9 @@ def _period(value, frequency):
     m = re.fullmatch(r"Q([1-4])\s+(20\d{2})", s, re.I)
     if frequency == "quarterly" and m:
         q, y = int(m.group(1)), int(m.group(2))
-        return date(y, q * 3, (31, 30, 30, 31)[q - 1]).isoformat()
+        month = q * 3
+        day = (31, 30, 30, 31)[q - 1]
+        return date(y, month, day).isoformat()
     return None
 
 
@@ -63,7 +64,7 @@ def _upsert_obs(ctx, payload):
 
 
 def load_arcep(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v1"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v2"})
     country = one(ctx.db, "countries", "iso3", "FRA")
     kpis = {k: one(ctx.db, "kpis", "code", k) for k in ALIASES}
     read = written = 0
@@ -73,7 +74,6 @@ def load_arcep(ctx: PipelineContext) -> dict:
         resources = [x for x in dataset.get("resources", []) if (x.get("format") or "").lower() == "xlsx"]
         for res in resources:
             title = res.get("title") or ""
-            # Metropolitan/national series only; deliberately exclude DCOM and price index for this first loader.
             if "DCOM" in title or "prix" in title.lower(): continue
             frequency = "quarterly" if "trimestriel" in title.lower() else "annual"
             url = res.get("latest") or res.get("url")
@@ -82,7 +82,6 @@ def load_arcep(ctx: PipelineContext) -> dict:
             for ws in wb.worksheets:
                 if ws.title != "Open Data": continue
                 rows = list(ws.iter_rows(values_only=True))
-                # Header periods live in row 2 for quarterly and row 3 for annual files (1-based).
                 header_idx = 1 if frequency == "quarterly" else 2
                 periods = [_period(v, frequency) for v in rows[header_idx]]
                 for ri, row in enumerate(rows):
@@ -92,16 +91,15 @@ def load_arcep(ctx: PipelineContext) -> dict:
                         unit = str(row[1]).strip() if len(row) > 1 and row[1] is not None else kpis[code]["unit"]
                         matched[code] = matched.get(code, 0) + 1
                         for ci in range(4, min(len(row), len(periods))):
-                            period = periods[ci]
-                            val = _safe_float(row[ci])
+                            period = periods[ci]; val = _safe_float(row[ci])
                             if not period or val is None: continue
                             read += 1
                             numeric = val * _scale(unit)
                             raw = {
-                                "source_id": source_id, "country_id": country["id"], "operator_id": None,
+                                "ingestion_run_id": run_id, "source_id": source_id, "country_id": country["id"], "operator_id": None,
                                 "source_indicator": label, "period_date": period, "frequency": frequency,
-                                "raw_value_text": str(row[ci]), "raw_value_numeric": val, "raw_unit": unit,
-                                "raw_currency": "EUR" if "€" in unit else None, "source_url": url,
+                                "value_text": str(row[ci]), "value_numeric": val, "unit_raw": unit,
+                                "currency_raw": "EUR" if "€" in unit else None, "source_url": url,
                                 "retrieved_at": utcnow(), "payload": {"sheet": ws.title, "row": ri + 1, "column": ci + 1,
                                 "resource_id": res.get("id"), "resource_title": title},
                                 "source_record_key": f"{res.get('id')}:{ws.title}:{ri+1}:{ci+1}"
@@ -109,13 +107,15 @@ def load_arcep(ctx: PipelineContext) -> dict:
                             raw_id = _upsert_raw(ctx, raw)
                             obs = {"kpi_id": kpis[code]["id"], "country_id": country["id"], "operator_id": None,
                                    "period_date": period, "frequency": frequency, "value": numeric,
-                                   "unit": kpis[code]["unit"], "currency": "EUR" if code == "CAPEX" else None,
+                                   "unit": kpis[code]["unit"], "currency_code": "EUR" if code == "CAPEX" else None,
                                    "source_id": source_id, "raw_observation_id": raw_id,
                                    "definition_version": kpis[code]["definition_version"], "quality_flag": "ok",
-                                   "retrieved_at": utcnow(), "notes": f"ARCEP: {label}"}
+                                   "retrieved_at": utcnow(), "quality_notes": f"ARCEP: {label}"}
                             _upsert_obs(ctx, obs); written += 1
-        finish_run(ctx, run_id, "success", read, written, metadata={"collector":"arcep_load_v1","matched":matched})
+        meta = {"collector":"arcep_load_v2","matched":matched}
+        finish_run(ctx, run_id, "success", read, written, metadata=meta)
+        ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(), "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, "matched": matched}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v1","matched":matched})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v2","matched":matched})
         raise
