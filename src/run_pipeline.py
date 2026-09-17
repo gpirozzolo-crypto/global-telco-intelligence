@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from supabase import create_client
 from ingest.arcep import discover as discover_arcep
+from ingest.arcep_inspect import inspect_arcep_workbooks
 from ingest.base import context
 from ingest.probe import SOURCES, probe
 
@@ -35,11 +36,16 @@ def arcep():
     print(json.dumps({"source": "ARCEP_OBS", "resources": len(result["resources"]), "dataset_last_modified": result["dataset_last_modified"]}))
 
 
+def arcep_inspect():
+    result = inspect_arcep_workbooks(context())
+    print(json.dumps({"source": "ARCEP_OBS", **result}))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", default="healthcheck", choices=["healthcheck", "probes", "arcep"])
+    parser.add_argument("--source", default="healthcheck", choices=["healthcheck", "probes", "arcep", "arcep-inspect"])
     args = parser.parse_args()
-    {"healthcheck": healthcheck, "probes": probes, "arcep": arcep}[args.source]()
+    {"healthcheck": healthcheck, "probes": probes, "arcep": arcep, "arcep-inspect": arcep_inspect}[args.source]()
 
 
 if __name__ == "__main__":
