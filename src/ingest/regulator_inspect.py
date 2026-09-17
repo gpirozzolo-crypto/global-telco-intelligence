@@ -15,6 +15,7 @@ CNMC_PAGES = [
     "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-generales/telecomunicaciones",
     "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-de-mercados/telecomunicaciones-3",
 ]
+CNMC_DATASTORE = "https://catalogodatos.cnmc.es/api/3/action/datastore_search"
 
 
 def _workbook_preview(ctx: PipelineContext, url: str) -> dict:
@@ -48,7 +49,6 @@ def inspect_bnetza(ctx: PipelineContext) -> dict:
         r = ctx.session.get(BNETZA_PAGE, timeout=30); r.raise_for_status()
         links = re.findall(r'href=["\']([^"\']+\.(?:xlsx|xlsm)[^"\']*)', r.text, re.I)
         links = list(dict.fromkeys(urljoin(r.url, x.replace("&amp;", "&")) for x in links))
-        # Prefer the current annual-report data workbook.
         current = [u for u in links if "25_Daten_TK" in u] or links[:1]
         books = [_workbook_preview(ctx, u) for u in current[:2]]
         finish_run(ctx, run_id, "success", len(links), 0, metadata={"collector":"bnetza_xlsx_inspect_v1","page":r.url,"workbooks":books})
@@ -58,15 +58,25 @@ def inspect_bnetza(ctx: PipelineContext) -> dict:
 
 
 def inspect_cnmc(ctx: PipelineContext) -> dict:
-    _, run_id = start_run(ctx, "CNMC_TELCO", {"collector":"cnmc_dataset_inspect_v1"})
+    _, run_id = start_run(ctx, "CNMC_TELCO", {"collector":"cnmc_dataset_inspect_v2"})
     pages = []
     try:
         for url in CNMC_PAGES:
             r = ctx.session.get(url, timeout=30); r.raise_for_status()
             ids = list(dict.fromkeys(re.findall(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', r.text, re.I)))
-            downloads = re.findall(r'href=["\']([^"\']+(?:csv|json|datastore_search)[^"\']*)', r.text, re.I)
-            pages.append({"url":r.url,"bytes":len(r.content),"resource_ids":ids[:10],"download_links":[urljoin(r.url,x.replace("&amp;","&")) for x in downloads[:10]]})
-        finish_run(ctx, run_id, "success", len(pages), 0, metadata={"collector":"cnmc_dataset_inspect_v1","pages":pages})
-        return {"pages":len(pages),"resource_ids":sum(len(x["resource_ids"]) for x in pages)}
+            resource_ids = [x for x in ids if x != "40f418dd-43a0-481a-9017-90ef982b4448"]
+            resources=[]
+            for rid in resource_ids[:3]:
+                api=ctx.session.get(CNMC_DATASTORE,params={"resource_id":rid,"limit":5},headers={"User-Agent":"GlobalTelcoIntelligence/1.0"},timeout=45)
+                item={"resource_id":rid,"status":api.status_code}
+                if api.ok:
+                    data=api.json().get("result",{})
+                    item.update({"total":data.get("total"),"fields":[f.get("id") for f in data.get("fields",[])],"sample":data.get("records",[])[:5]})
+                else:
+                    item["error"]=api.text[:300]
+                resources.append(item)
+            pages.append({"url":r.url,"bytes":len(r.content),"resource_ids":resource_ids[:10],"resources":resources})
+        finish_run(ctx, run_id, "success", len(pages), 0, metadata={"collector":"cnmc_dataset_inspect_v2","pages":pages})
+        return {"pages":len(pages),"resource_ids":sum(len(x["resource_ids"]) for x in pages),"api_resources":sum(len(x["resources"]) for x in pages)}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", len(pages), 0, str(exc)[:1000], {"collector":"cnmc_dataset_inspect_v1","pages":pages}); raise
+        finish_run(ctx, run_id, "failed", len(pages), 0, str(exc)[:1000], {"collector":"cnmc_dataset_inspect_v2","pages":pages}); raise
