@@ -20,12 +20,13 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Supabase connectivity check
-        env:
+        env: &supabase_env
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python src/run_pipeline.py --source healthcheck
       - name: Probe regulatory sources
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        env: *supabase_env
         run: python src/run_pipeline.py --source probes
+      - name: Discover ARCEP resources
+        env: *supabase_env
+        run: python src/run_pipeline.py --source arcep
