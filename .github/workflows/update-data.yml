@@ -51,3 +51,9 @@ jobs:
       - name: Load BNetzA raw and normalized observations
         env: *supabase_env
         run: python src/run_pipeline.py --source bnetza-load
+      - name: Refresh calculated KPIs
+        env: *supabase_env
+        run: python src/run_pipeline.py --source calculated
+      - name: Run data quality checks
+        env: *supabase_env
+        run: python src/run_pipeline.py --source quality
