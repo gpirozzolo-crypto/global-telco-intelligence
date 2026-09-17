@@ -57,8 +57,18 @@ def inspect_bnetza(ctx: PipelineContext) -> dict:
         finish_run(ctx, run_id, "failed", 0, 0, str(exc)[:1000], {"collector":"bnetza_xlsx_inspect_v1"}); raise
 
 
+def _cnmc_profile(records: list[dict]) -> dict:
+    periods = sorted({str(r.get("trimestre") or r.get("mes") or "") for r in records if r.get("trimestre") or r.get("mes")}, reverse=True)
+    latest = periods[0] if periods else None
+    latest_rows = [r for r in records if str(r.get("trimestre") or r.get("mes") or "") == latest]
+    pairs = sorted({(str(r.get("servicio") or ""), str(r.get("concepto") or "")) for r in latest_rows})
+    keep = {"trimestre","mes","servicio","concepto","operador","tecnologia_de_acceso","tipo_de_mercado","tipo_de_ingreso","unidades","ingresos","ingresos_por_operador","lineas","lineas_o_accesos","lineas_o_accesos_por_operador","tasa_de_penetracion","trafico_de_datos"}
+    samples = [{k:v for k,v in r.items() if k in keep and v not in (None,"N/A")} for r in latest_rows[:30]]
+    return {"latest_period":latest,"service_concepts":[{"servicio":a,"concepto":b} for a,b in pairs[:100]],"latest_sample":samples}
+
+
 def inspect_cnmc(ctx: PipelineContext) -> dict:
-    _, run_id = start_run(ctx, "CNMC_TELCO", {"collector":"cnmc_dataset_inspect_v2"})
+    _, run_id = start_run(ctx, "CNMC_TELCO", {"collector":"cnmc_dataset_inspect_v3"})
     pages = []
     try:
         for url in CNMC_PAGES:
@@ -67,16 +77,15 @@ def inspect_cnmc(ctx: PipelineContext) -> dict:
             resource_ids = [x for x in ids if x != "40f418dd-43a0-481a-9017-90ef982b4448"]
             resources=[]
             for rid in resource_ids[:3]:
-                api=ctx.session.get(CNMC_DATASTORE,params={"resource_id":rid,"limit":5},headers={"User-Agent":"GlobalTelcoIntelligence/1.0"},timeout=45)
+                api=ctx.session.get(CNMC_DATASTORE,params={"resource_id":rid,"limit":5000},headers={"User-Agent":"GlobalTelcoIntelligence/1.0"},timeout=90)
                 item={"resource_id":rid,"status":api.status_code}
                 if api.ok:
-                    data=api.json().get("result",{})
-                    item.update({"total":data.get("total"),"fields":[f.get("id") for f in data.get("fields",[])],"sample":data.get("records",[])[:5]})
-                else:
-                    item["error"]=api.text[:300]
+                    data=api.json().get("result",{}); records=data.get("records",[])
+                    item.update({"total":data.get("total"),"fields":[f.get("id") for f in data.get("fields",[])],"profile":_cnmc_profile(records)})
+                else: item["error"]=api.text[:300]
                 resources.append(item)
             pages.append({"url":r.url,"bytes":len(r.content),"resource_ids":resource_ids[:10],"resources":resources})
-        finish_run(ctx, run_id, "success", len(pages), 0, metadata={"collector":"cnmc_dataset_inspect_v2","pages":pages})
+        finish_run(ctx, run_id, "success", len(pages), 0, metadata={"collector":"cnmc_dataset_inspect_v3","pages":pages})
         return {"pages":len(pages),"resource_ids":sum(len(x["resource_ids"]) for x in pages),"api_resources":sum(len(x["resources"]) for x in pages)}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", len(pages), 0, str(exc)[:1000], {"collector":"cnmc_dataset_inspect_v2","pages":pages}); raise
+        finish_run(ctx, run_id, "failed", len(pages), 0, str(exc)[:1000], {"collector":"cnmc_dataset_inspect_v3","pages":pages}); raise
