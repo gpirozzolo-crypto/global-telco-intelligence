@@ -41,11 +41,21 @@ def bnetza_inspect(): print(json.dumps({"source":"BNetzA_TK",**inspect_bnetza(co
 def agcom_load(): print(json.dumps({"source":"AGCOM_OBS",**load_agcom(context())}))
 def bnetza_load(): print(json.dumps({"source":"BNetzA_TK",**load_bnetza(context())}))
 
+def calculated():
+    sb = client()
+    result = sb.rpc("refresh_calculated_kpis").execute()
+    print(json.dumps({"stage":"calculated-kpis","result":result.data}, default=str))
+
+def quality():
+    sb = client()
+    result = sb.rpc("run_observation_quality_checks").execute()
+    print(json.dumps({"stage":"quality-checks","new_issues":result.data}, default=str))
+
 def main():
     parser=argparse.ArgumentParser()
     funcs={"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load,
            "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"cnmc-load":cnmc_load,"bnetza-inspect":bnetza_inspect,
-           "agcom-load":agcom_load,"bnetza-load":bnetza_load}
+           "agcom-load":agcom_load,"bnetza-load":bnetza_load,"calculated":calculated,"quality":quality}
     parser.add_argument("--source",default="healthcheck",choices=list(funcs))
     args=parser.parse_args(); funcs[args.source]()
 
