@@ -4,7 +4,7 @@ import io
 
 from openpyxl import load_workbook
 
-from .arcep import API_URL
+from .arcep import DATASET_API
 from .base import PipelineContext, finish_run, start_run
 
 
@@ -13,7 +13,9 @@ def inspect_arcep_workbooks(ctx: PipelineContext) -> dict:
     _, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_xlsx_inspect_v1"})
     inspected = []
     try:
-        dataset = ctx.session.get(API_URL, timeout=30).json()
+        response = ctx.session.get(DATASET_API, timeout=30)
+        response.raise_for_status()
+        dataset = response.json()
         resources = [r for r in dataset.get("resources", []) if (r.get("format") or "").lower() == "xlsx"]
         for resource in resources:
             url = resource.get("latest") or resource.get("url")
