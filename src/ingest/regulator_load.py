@@ -19,6 +19,11 @@ def _num(v):
     except ValueError: return None
 
 
+def _year(v):
+    m = re.search(r"(?:19|20)\d{2}", str(v or ""))
+    return int(m.group(0)) if m else None
+
+
 def _raw(ctx, p):
     q=(ctx.db.table("raw_observations").select("id").eq("source_id",p["source_id"]).eq("country_id",p["country_id"])
        .eq("source_indicator",p["source_indicator"]).eq("period_date",p["period_date"]).eq("frequency",p["frequency"])
@@ -64,7 +69,6 @@ def load_agcom(ctx: PipelineContext) -> dict:
     try:
         url=_xlsx_link(ctx,AGCOM_PAGE,"OPEN%20DATA%20Oss.%202-2026")
         x=ctx.session.get(url,timeout=90); x.raise_for_status(); wb=load_workbook(io.BytesIO(x.content),read_only=True,data_only=True)
-        # Quarterly fixed broadband and human SIMs: dates are in row 3, values in known total rows.
         for sheet,row_idx,code,label in [("1.2",9,"FIXED_BB_SUBS","Totale - Total"),("1.7",8,"MOBILE_SUBS","Human (*)")]:
             ws=wb[sheet]; rows=list(ws.iter_rows(values_only=True)); dates=rows[2]
             for ci in range(1,min(9,len(dates))):
@@ -72,7 +76,6 @@ def load_agcom(ctx: PipelineContext) -> dict:
                 if not isinstance(d,(date,datetime)) or v is None: continue
                 period=d.date().isoformat() if isinstance(d,datetime) else d.isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"quarterly",v,"million",v*1_000_000,url,{"sheet":sheet,"row":row_idx,"column":ci+1}); written+=1
-        # Current FTTH series from main historical table, quarterly.
         ws=wb["Principali serie storiche"]; rows=list(ws.iter_rows(values_only=True)); headers=rows[2]
         ftth=next((r for r in rows if str(r[0]).strip()=="- FTTH"),None)
         if ftth:
@@ -81,7 +84,6 @@ def load_agcom(ctx: PipelineContext) -> dict:
                 if not m or v is None: continue
                 q,y=int(m.group(1)),2000+int(m.group(2)); month=q*3; day=(31,30,30,31)[q-1]; period=date(y,month,day).isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k["FTTH_SUBS"],"FTTH",period,"quarterly",v,"million",v*1_000_000,url,{"sheet":ws.title,"column":ci+1}); written+=1
-        # Annual revenues, EUR billions.
         ws=wb["RA2026 1-2"]; rows=list(ws.iter_rows(values_only=True)); years=[int(v) if isinstance(v,(int,float)) else int(v) if str(v).isdigit() else None for v in rows[3]]
         rev={"Comunicazioni elettroniche":"TELCO_REVENUE","   - Rete fissa":"FIXED_REVENUE","   - Rete mobile":"MOBILE_REVENUE"}
         for r in rows:
@@ -100,7 +102,7 @@ def load_agcom(ctx: PipelineContext) -> dict:
 
 
 def load_bnetza(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"BNetzA_TK",{"collector":"bnetza_load_v1"}); read=written=0
+    source_id,run_id=start_run(ctx,"BNetzA_TK",{"collector":"bnetza_load_v2"}); read=written=0
     country=one(ctx.db,"countries","iso3","DEU")
     codes=["TELCO_REVENUE","FIXED_REVENUE","MOBILE_REVENUE","CAPEX","FIXED_BB_SUBS","FTTH_SUBS","FTTH_HOMES_PASSED","FTTH_TAKEUP","MOBILE_SUBS","5G_SUBS","MOBILE_DATA_TRAFFIC"]
     k={c:one(ctx.db,"kpis","code",c) for c in codes}
@@ -119,33 +121,36 @@ def load_bnetza(ctx: PipelineContext) -> dict:
             target=next((r for r in rows if str(r[2] or "").strip()==label),None)
             if not target: continue
             for ci in range(3,min(len(target),len(header))):
-                ys=re.sub(r"\D","",str(header[ci] or "")); v=_num(target[ci])
-                if len(ys)<4 or v is None: continue
-                y=int(ys[:4]); period=date(y,12,31).isoformat(); read+=1
+                y=_year(header[ci]); v=_num(target[ci])
+                if y is None or v is None: continue
+                period=date(y,12,31).isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"annual",v,unit,v*scale,url,{"sheet":sheet,"column":ci+1},currency); written+=1
-        # Segment revenues 2023-2025.
         rows=list(wb["Außenumsatz Segmente"].iter_rows(values_only=True)); header=rows[1]
         for label,code in [("Außenumsatzerlöse über Festnetze","FIXED_REVENUE"),("Außenumsatzerlöse über Mobilfunknetze","MOBILE_REVENUE")]:
             target=next(r for r in rows if str(r[2] or "").strip()==label)
             for ci in (3,5,7):
-                y=int(header[ci]); v=_num(target[ci]); period=date(y,12,31).isoformat(); read+=1
+                y=_year(header[ci]); v=_num(target[ci])
+                if y is None or v is None: continue
+                period=date(y,12,31).isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"annual",v,"billion EUR",v*1_000_000_000,url,{"sheet":"Außenumsatz Segmente","column":ci+1},"EUR"); written+=1
-        # Fiber homes passed and take-up 2023-2025.
         rows=list(wb["Glasfaser-Anschlüsse"].iter_rows(values_only=True)); header=rows[1]
         for label,code,scale,unit in [("Homes Passed","FTTH_HOMES_PASSED",1_000_000,"million"),("Take-up-Rate (FttH und FttB Activated bezogen auf Homes Passed)","FTTH_TAKEUP",100,"ratio")]:
             target=next(r for r in rows if str(r[2] or "").strip()==label)
             for ci in (3,4,5):
-                y=int(header[ci]); v=_num(target[ci]); period=date(y,12,31).isoformat(); read+=1
+                y=_year(header[ci]); v=_num(target[ci])
+                if y is None or v is None: continue
+                period=date(y,12,31).isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"annual",target[ci],unit,v*scale,url,{"sheet":"Glasfaser-Anschlüsse","column":ci+1}); written+=1
-        # Mobile SIM and 5G subscribers 2023-2025.
         rows=list(wb["SIM-Profile"].iter_rows(values_only=True)); years={4:2023,6:2024,8:2025}
         for label,code in [("insgesamt, ohne M2M","MOBILE_SUBS"),("davon 5G-Teilnehmer (NSA)","5G_SUBS")]:
             target=next(r for r in rows if str(r[2] or "").strip()==label)
             for ci,y in years.items():
-                v=_num(target[ci]); period=date(y,12,31).isoformat(); read+=1
+                v=_num(target[ci]);
+                if v is None: continue
+                period=date(y,12,31).isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"annual",v,"million",v*1_000_000,url,{"sheet":"SIM-Profile","column":ci+1}); written+=1
-        meta={"collector":"bnetza_load_v1","rows":written}; finish_run(ctx,run_id,"success",read,written,metadata=meta)
+        meta={"collector":"bnetza_load_v2","rows":written}; finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"bnetza_load_v1"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"bnetza_load_v2"}); raise
