@@ -42,6 +42,9 @@ jobs:
       - name: Inspect CNMC datasets
         env: *supabase_env
         run: python src/run_pipeline.py --source cnmc-inspect
+      - name: Load CNMC raw and normalized observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source cnmc-load
       - name: Inspect BNetzA workbook
         env: *supabase_env
         run: python src/run_pipeline.py --source bnetza-inspect
