@@ -36,9 +36,15 @@ jobs:
       - name: Inspect AGCOM workbook
         env: *supabase_env
         run: python src/run_pipeline.py --source agcom-inspect
+      - name: Load AGCOM raw and normalized observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source agcom-load
       - name: Inspect CNMC datasets
         env: *supabase_env
         run: python src/run_pipeline.py --source cnmc-inspect
       - name: Inspect BNetzA workbook
         env: *supabase_env
         run: python src/run_pipeline.py --source bnetza-inspect
+      - name: Load BNetzA raw and normalized observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source bnetza-load
