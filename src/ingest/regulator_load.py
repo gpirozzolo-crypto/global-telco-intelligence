@@ -62,9 +62,9 @@ def _xlsx_link(ctx, page, pattern):
 
 
 def load_agcom(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"AGCOM_OBS",{"collector":"agcom_load_v1"}); read=written=0
+    source_id,run_id=start_run(ctx,"AGCOM_OBS",{"collector":"agcom_load_v2"}); read=written=0
     country=one(ctx.db,"countries","iso3","ITA")
-    codes=["FIXED_BB_SUBS","FTTH_SUBS","MOBILE_SUBS","TELCO_REVENUE","FIXED_REVENUE","MOBILE_REVENUE","MOBILE_DATA_TRAFFIC"]
+    codes=["FIXED_BB_SUBS","FTTH_SUBS","MOBILE_SUBS","TELCO_REVENUE","FIXED_REVENUE","MOBILE_REVENUE"]
     k={c:one(ctx.db,"kpis","code",c) for c in codes}
     try:
         url=_xlsx_link(ctx,AGCOM_PAGE,"OPEN%20DATA%20Oss.%202-2026")
@@ -76,29 +76,27 @@ def load_agcom(ctx: PipelineContext) -> dict:
                 if not isinstance(d,(date,datetime)) or v is None: continue
                 period=d.date().isoformat() if isinstance(d,datetime) else d.isoformat(); read+=1
                 _write(ctx,run_id,source_id,country,k[code],label,period,"quarterly",v,"million",v*1_000_000,url,{"sheet":sheet,"row":row_idx,"column":ci+1}); written+=1
-        ws=wb["Principali serie storiche"]; rows=list(ws.iter_rows(values_only=True)); headers=rows[2]
-        ftth=next((r for r in rows if str(r[0]).strip()=="- FTTH"),None)
-        if ftth:
-            for ci in range(1,min(len(ftth),len(headers))):
-                h=str(headers[ci] or ""); m=re.fullmatch(r"([1-4])T(\d{2})",h); v=_num(ftth[ci])
-                if not m or v is None: continue
-                q,y=int(m.group(1)),2000+int(m.group(2)); month=q*3; day=(31,30,30,31)[q-1]; period=date(y,month,day).isoformat(); read+=1
-                _write(ctx,run_id,source_id,country,k["FTTH_SUBS"],"FTTH",period,"quarterly",v,"million",v*1_000_000,url,{"sheet":ws.title,"column":ci+1}); written+=1
-        ws=wb["RA2026 1-2"]; rows=list(ws.iter_rows(values_only=True)); years=[int(v) if isinstance(v,(int,float)) else int(v) if str(v).isdigit() else None for v in rows[3]]
-        rev={"Comunicazioni elettroniche":"TELCO_REVENUE","   - Rete fissa":"FIXED_REVENUE","   - Rete mobile":"MOBILE_REVENUE"}
-        for r in rows:
-            label=str(r[0] or "")
-            if label not in rev: continue
+        # FTTH historical series is an index/percentage-style series in this workbook,
+        # not a subscriber count. Do not map it to FTTH_SUBS until a count series is identified.
+        # Revenue sheet contains both sector totals and subcomponents. Load only rows whose
+        # values reconcile: electronic communications = fixed + mobile for the same year.
+        ws=wb["RA2026 1-2"]; rows=list(ws.iter_rows(values_only=True)); years=[_year(v) for v in rows[3]]
+        labels={str(r[0] or "").strip():r for r in rows}
+        total=labels.get("Comunicazioni elettroniche"); fixed=labels.get("- Rete fissa"); mobile=labels.get("- Rete mobile")
+        if total and fixed and mobile:
             for ci,y in enumerate(years):
-                v=_num(r[ci]) if ci<len(r) else None
-                if not y or v is None: continue
-                period=date(y,12,31).isoformat(); code=rev[label]; read+=1
-                _write(ctx,run_id,source_id,country,k[code],label,period,"annual",v,"billion EUR",v*1_000_000_000,url,{"sheet":ws.title,"column":ci+1},"EUR"); written+=1
-        meta={"collector":"agcom_load_v1","rows":written}; finish_run(ctx,run_id,"success",read,written,metadata=meta)
+                tv=_num(total[ci]) if ci<len(total) else None; fv=_num(fixed[ci]) if ci<len(fixed) else None; mv=_num(mobile[ci]) if ci<len(mobile) else None
+                if not y or None in (tv,fv,mv): continue
+                # Reject columns that are not comparable monetary totals.
+                if abs(tv-(fv+mv)) > max(0.2,abs(tv)*0.02): continue
+                for code,label,v in [("TELCO_REVENUE","Comunicazioni elettroniche",tv),("FIXED_REVENUE","Rete fissa",fv),("MOBILE_REVENUE","Rete mobile",mv)]:
+                    period=date(y,12,31).isoformat(); read+=1
+                    _write(ctx,run_id,source_id,country,k[code],label,period,"annual",v,"billion EUR",v*1_000_000_000,url,{"sheet":ws.title,"column":ci+1,"reconciled":True},"EUR"); written+=1
+        meta={"collector":"agcom_load_v2","rows":written}; finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"agcom_load_v1"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"agcom_load_v2"}); raise
 
 
 def load_bnetza(ctx: PipelineContext) -> dict:
