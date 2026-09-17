@@ -12,9 +12,6 @@ GENERAL_RESOURCE = "73e962dc-ab8f-4994-81c2-352146e1f7c0"
 MARKETS_URL = "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-de-mercados/telecomunicaciones-3"
 GENERAL_URL = "https://data.cnmc.es/telecomunicaciones-y-sector-audiovisual/datos-trimestrales/datos-generales/telecomunicaciones"
 
-# CNMC market data mixes country-total rows, dimensional rows and operator rows.
-# We prefer an explicit country-total row when it is unique; otherwise we sum a
-# single, mutually-exclusive dimension only when no operator is present.
 RULES = [
     ("MOBILE_SUBS", "Telefonía móvil", "Líneas", "lineas_o_accesos", None),
     ("FIXED_BB_SUBS", "Banda ancha fija minorista", "Líneas", "lineas_o_accesos", None),
@@ -25,11 +22,16 @@ RULES = [
     ("MOBILE_DATA_TRAFFIC", "Banda Ancha móvil", "Tráfico - datos", "trafico_de_datos", None),
 ]
 
+# Every populated field below is a semantic dimension. In particular,
+# tipo_de_ingreso must not be ignored: otherwise the unique "Otros" row can be
+# mistaken for total service revenue. _country_total may safely sum a single
+# mutually-exclusive dimension when all other dimensions are aggregate/N/A.
 DIMENSIONS = ["tipo_de_mercado","tipo_de_cliente","segmento","tipo_de_trafico","tipo_de_contrato","tipo_de_linea",
               "tipo_de_mensaje","tipo_de_trafico_de_mensaje","tecnologia_de_acceso","velocidad_baf","tipo_de_oferta",
               "tipo_de_tarifa","tipo_de_ce_minorista","tipo_de_circuito","tipo_de_emision","tipo_de_operador","tipo_de_medio",
               "tipo_de_publicidad","tipo_de_contratacion","tipo_servicio_audiovisual_mayorista","tipo_de_ba_may",
-              "tipo_de_interconexion","tipo_de_tarificacion_en_interconexion","tipo_de_ambito","tipo_de_acceso_de_infraestructuras"]
+              "tipo_de_interconexion","tipo_de_tarificacion_en_interconexion","tipo_de_ambito","tipo_de_acceso_de_infraestructuras",
+              "tipo_de_ingreso","tipo_de_paquete"]
 
 def _na(v): return v in (None, "", "N/A")
 
@@ -71,18 +73,14 @@ def _matches(r, service, concept, filters):
     return all(r.get(k)==v for k,v in (filters or {}).items())
 
 def _country_total(rows, field, filters):
-    # Remove dimensions fixed by the KPI definition (e.g. FTTH technology).
     fixed=set((filters or {}).keys())
     dims=[d for d in DIMENSIONS if d not in fixed]
     direct=[r for r in rows if all(_na(r.get(d)) for d in dims) and _num(r.get(field)) is not None]
     if len(direct)==1:
         return _num(direct[0][field]), [direct[0]], "direct_total"
-    # Some CNMC totals retain tipo_de_mercado. Accept a unique row after
-    # ignoring that dimension, but never sum retail+wholesale into one KPI.
     relaxed=[r for r in rows if all(_na(r.get(d)) for d in dims if d!="tipo_de_mercado") and _num(r.get(field)) is not None]
     if len(relaxed)==1:
         return _num(relaxed[0][field]), [relaxed[0]], "unique_market_total"
-    # If no total exists, aggregate only one populated dimension at a time.
     for dim in dims:
         candidates=[r for r in rows if not _na(r.get(dim)) and all(_na(r.get(d)) for d in dims if d!=dim) and _num(r.get(field)) is not None]
         labels=[str(r.get(dim)) for r in candidates]
@@ -108,7 +106,7 @@ def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, cod
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v3"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v4"})
     country=one(ctx.db,"countries","iso3","ESP")
     codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
@@ -125,21 +123,18 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                 indicator=f"{service} | {concept}" + (" | "+";".join(f"{a}={b}" for a,b in filters.items()) if filters else "")
                 _write(ctx,run_id,source_id,country,kpis[code],MARKETS_RESOURCE,MARKETS_URL,used,code,indicator,field,value,method)
                 written+=1; matched[code]=matched.get(code,0)+1
-        # Total telecom revenue: sum the mutually exclusive ingreso categories
-        # across retail and wholesale; operator rows are excluded.
         for period in sorted({_period(r.get("trimestre")) for r in general if _period(r.get("trimestre"))}):
             rows=[r for r in general if _period(r.get("trimestre"))==period and r.get("concepto")=="Ingresos" and _na(r.get("operador"))
                   and not _na(r.get("tipo_de_ingreso")) and _na(r.get("tipo_de_paquete")) and _num(r.get("ingresos")) is not None]
-            # Each tipo_de_ingreso belongs to one market; duplicates would make the aggregate unsafe.
             keys=[(r.get("tipo_de_mercado"),r.get("tipo_de_ingreso")) for r in rows]
             if rows and len(keys)==len(set(keys)):
                 value=sum(_num(r["ingresos"]) for r in rows)
                 _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
                        "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
                 written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
-        meta={"collector":"cnmc_quarterly_load_v3","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
+        meta={"collector":"cnmc_quarterly_load_v4","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v3","matched":matched,"skipped":skipped}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v4","matched":matched,"skipped":skipped}); raise
