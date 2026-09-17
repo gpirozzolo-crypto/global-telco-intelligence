@@ -9,6 +9,7 @@ from ingest.arcep import discover as discover_arcep
 from ingest.arcep_inspect import inspect_arcep_workbooks
 from ingest.arcep_load import load_arcep
 from ingest.base import context
+from ingest.cnmc_load import load_cnmc
 from ingest.probe import SOURCES, probe
 from ingest.regulator_inspect import inspect_agcom, inspect_bnetza, inspect_cnmc
 from ingest.regulator_load import load_agcom, load_bnetza
@@ -35,6 +36,7 @@ def arcep_inspect(): print(json.dumps({"source":"ARCEP_OBS",**inspect_arcep_work
 def arcep_load(): print(json.dumps({"source":"ARCEP_OBS",**load_arcep(context())}))
 def agcom_inspect(): print(json.dumps({"source":"AGCOM_OBS",**inspect_agcom(context())}))
 def cnmc_inspect(): print(json.dumps({"source":"CNMC_TELCO",**inspect_cnmc(context())}))
+def cnmc_load(): print(json.dumps({"source":"CNMC_TELCO",**load_cnmc(context())}))
 def bnetza_inspect(): print(json.dumps({"source":"BNetzA_TK",**inspect_bnetza(context())}))
 def agcom_load(): print(json.dumps({"source":"AGCOM_OBS",**load_agcom(context())}))
 def bnetza_load(): print(json.dumps({"source":"BNetzA_TK",**load_bnetza(context())}))
@@ -42,7 +44,7 @@ def bnetza_load(): print(json.dumps({"source":"BNetzA_TK",**load_bnetza(context(
 def main():
     parser=argparse.ArgumentParser()
     funcs={"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load,
-           "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"bnetza-inspect":bnetza_inspect,
+           "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"cnmc-load":cnmc_load,"bnetza-inspect":bnetza_inspect,
            "agcom-load":agcom_load,"bnetza-load":bnetza_load}
     parser.add_argument("--source",default="healthcheck",choices=list(funcs))
     args=parser.parse_args(); funcs[args.source]()
