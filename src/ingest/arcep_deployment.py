@@ -69,7 +69,19 @@ def _national_ftth_total(wb):
     unique = {(h[0], h[1], h[2], h[3]): h for h in hits}
     if len(unique) != 1:
         sample = diagnostics[:12]
-        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; matched metric rows={sample}")
+        if not sample:
+            # Diagnostic only: inspect likely fibre rows without mapping them.
+            for ws in wb.worksheets:
+                for ri, row in enumerate(ws.iter_rows(values_only=True)):
+                    cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                    joined = " | ".join(cells)
+                    if joined and re.search(r"(ftth|fibre|abonn|raccord|eligible|éligib)", joined, re.I):
+                        sample.append({"sheet": ws.title, "row": ri + 1, "context": joined[:500]})
+                        if len(sample) >= 20:
+                            break
+                if len(sample) >= 20:
+                    break
+        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; diagnostic rows={sample}")
     return next(iter(unique.values()))
 
 
