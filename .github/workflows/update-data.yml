@@ -63,6 +63,9 @@ jobs:
       - name: Load Ofcom source-driven observations
         env: *supabase_env
         run: python src/run_pipeline.py --source ofcom-load
+      - name: Load Ofcom Connected Nations fibre observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source ofcom-fibre-load
       - name: Refresh calculated KPIs
         env: *supabase_env
         run: python src/run_pipeline.py --source calculated
