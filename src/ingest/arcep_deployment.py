@@ -36,11 +36,13 @@ def _latest_workbook(dataset: dict):
 
 
 def _national_ftth_total(wb):
-    # Fail closed: accept only an explicit national/France row associated with
-    # an explicit FTTH raccordable-premises label. Never sum zones/operators.
-    label_rx = re.compile(r"locaux.*raccordables.*ftth|ftth.*locaux.*raccordables", re.I)
-    france_rx = re.compile(r"^(france|total france|ensemble france|total national)$", re.I)
+    # Fail closed. ARCEP deployment workbooks are primarily geographic tables:
+    # prefer an explicit national row, otherwise accept a single explicit
+    # aggregate metric cell. Never sum geographic rows or operators here.
+    label_rx = re.compile(r"(locaux|premises).*(raccordables|raccordable).*(ftth)|ftth.*(locaux|premises).*(raccordables|raccordable)", re.I)
+    france_rx = re.compile(r"^(france|total france|ensemble france|france entière|total national|national)$", re.I)
     hits = []
+    diagnostics = []
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(values_only=True))
         for ri, row in enumerate(rows):
@@ -48,7 +50,14 @@ def _national_ftth_total(wb):
             joined = " | ".join(cells)
             if not label_rx.search(joined):
                 continue
-            for rj in range(max(0, ri - 5), min(len(rows), ri + 30)):
+            diagnostics.append({"sheet":ws.title,"row":ri+1,"context":joined[:500]})
+            # Case 1: label and a single national aggregate value share a row.
+            nums = [(ci, _safe_float(v)) for ci, v in enumerate(row)]
+            nums = [(ci, v) for ci, v in nums if v is not None and v > 1_000_000]
+            if len(nums) == 1 and any(france_rx.fullmatch(x) for x in cells):
+                hits.append((ws.title, ri + 1, nums[0][0] + 1, nums[0][1], joined))
+            # Case 2: explicit national row is near the metric header.
+            for rj in range(max(0, ri - 8), min(len(rows), ri + 80)):
                 rr = rows[rj]
                 text = ["" if v is None else str(v).strip() for v in rr]
                 if not any(france_rx.fullmatch(x) for x in text):
@@ -59,7 +68,8 @@ def _national_ftth_total(wb):
                     hits.append((ws.title, rj + 1, nums[0][0] + 1, nums[0][1], joined))
     unique = {(h[0], h[1], h[2], h[3]): h for h in hits}
     if len(unique) != 1:
-        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}")
+        sample = diagnostics[:12]
+        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; matched metric rows={sample}")
     return next(iter(unique.values()))
 
 
