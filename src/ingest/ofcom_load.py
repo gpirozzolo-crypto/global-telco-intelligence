@@ -7,8 +7,16 @@ from .regulator_load import _write
 
 PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"
 
+LABELS={
+ "FIXED_BB_SUBS":[r"fixed broadband.*lines",r"fixed broadband connections"],
+ "MOBILE_SUBS":[r"active mobile subscriptions.*excluding M2M",r"active mobile subscriptions"],
+ "MOBILE_REVENUE":[r"mobile.*retail revenue",r"mobile telephony services.*retail revenue"],
+ "MOBILE_ARPU":[r"average monthly retail revenue per subscriber"],
+ "MOBILE_DATA_TRAFFIC":[r"mobile.*data.*(traffic|usage|volume)"],
+}
+
 def _num(v):
-    if v is None: return None
+    if v is None:return None
     s=str(v).strip().replace(",","")
     s=re.sub(r"[^0-9eE+.-]","",s)
     try:return float(s)
@@ -19,34 +27,66 @@ def _csv_url(ctx):
     links=re.findall(r'href=["\']([^"\']+\.csv[^"\']*)',r.text,re.I)
     urls=[urljoin(r.url,x.replace("&amp;","&")) for x in links]
     if not urls: raise RuntimeError("Ofcom CSV link not found")
-    return urls[0]
+    # Page is newest-first. Require Q1 2026 context rather than silently using an old file.
+    q1=[u for u in urls if "2026" in u.lower() or "q1" in u.lower()]
+    return q1[0] if q1 else urls[0]
+
+def _period(rows):
+    text=" ".join(" ".join(r) for r in rows[:80])
+    m=re.search(r"Q([1-4])\s*(20\d{2})",text,re.I)
+    if not m: raise RuntimeError("Ofcom CSV period not identified")
+    q,y=int(m.group(1)),int(m.group(2))
+    return date(y,q*3,(31,30,30,31)[q-1]).isoformat()
+
+def _scale(value,unit,code):
+    u=(unit or "").lower()
+    if code in {"FIXED_BB_SUBS","MOBILE_SUBS"}:
+        if "million" in u or re.search(r"\bm\b",u): return value*1_000_000
+        if "thousand" in u or "000" in u: return value*1_000
+    if code=="MOBILE_REVENUE":
+        if "billion" in u or "bn" in u: return value*1_000_000_000
+        if "million" in u or re.search(r"\bm\b",u): return value*1_000_000
+    if code=="MOBILE_DATA_TRAFFIC":
+        if "pb" in u: return value*1_000_000
+        if "tb" in u: return value*1_000
+    return value
+
+def _extract(rows,code):
+    hits=[]
+    for ri,row in enumerate(rows):
+        cells=[str(x).strip() for x in row]
+        joined=" | ".join(cells)
+        if not any(re.search(p,joined,re.I) for p in LABELS[code]): continue
+        nums=[(ci,_num(x)) for ci,x in enumerate(cells)]
+        nums=[x for x in nums if x[1] is not None]
+        if not nums: continue
+        # Prefer the right-most numeric cell: Ofcom tables place latest period to the right.
+        ci,val=nums[-1]
+        unit=" ".join(cells[max(0,ci-2):min(len(cells),ci+3)])
+        hits.append((ri+1,ci+1,val,unit,joined))
+    if len(hits)!=1: raise RuntimeError(f"Expected one Ofcom row for {code}, found {len(hits)}")
+    return hits[0]
 
 def load_ofcom(ctx: PipelineContext)->dict:
-    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v1"})
+    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v2"})
     read=written=0; country=one(ctx.db,"countries","iso3","GBR")
-    codes=["FIXED_BB_SUBS","MOBILE_SUBS","MOBILE_REVENUE","MOBILE_ARPU","MOBILE_DATA_TRAFFIC"]
-    k={c:one(ctx.db,"kpis","code",c) for c in codes}
+    codes=list(LABELS); k={c:one(ctx.db,"kpis","code",c) for c in codes}
     try:
         url=_csv_url(ctx); r=ctx.session.get(url,timeout=90); r.raise_for_status()
         rows=list(csv.reader(io.StringIO(r.content.decode("utf-8-sig",errors="replace"))))
-        text="\n".join(",".join(x) for x in rows)
-        # Conservative headline extraction. Fail closed if official labels change.
-        specs=[
-          ("FIXED_BB_SUBS",r"29\.4\s*million\s*fixed broadband",29_400_000,"subscriptions",None),
-          ("MOBILE_SUBS",r"90\.6\s*million",90_600_000,"subscriptions",None),
-          ("MOBILE_REVENUE",r"3\.57\s*bn",3_570_000_000,"GBP","GBP"),
-          ("MOBILE_ARPU",r"13\.10",13.10,"GBP/sub/month","GBP"),
-          ("MOBILE_DATA_TRAFFIC",r"3042\s*PB",3_042_000_000,"GB",None),
-        ]
-        period=date(2026,3,31).isoformat()
-        for code,pat,value,raw_unit,currency in specs:
-            read+=1
-            if not re.search(pat,text,re.I): continue
-            _write(ctx,run_id,source_id,country,k[code],f"Ofcom Q1 2026 {code}",period,"quarterly",value,raw_unit,value,url,{"collector":"ofcom_csv_v1","validated_headline":True},currency); written+=1
-        if written==0: raise RuntimeError("Ofcom CSV fetched but expected Q1 2026 headline values were not found")
-        meta={"collector":"ofcom_csv_v1","rows":written,"source_url":url}
+        period=_period(rows)
+        for code in codes:
+            ri,ci,raw,unit,context=_extract(rows,code); read+=1
+            value=_scale(raw,unit,code)
+            currency="GBP" if code in {"MOBILE_REVENUE","MOBILE_ARPU"} else None
+            out_unit={"FIXED_BB_SUBS":"subscriptions","MOBILE_SUBS":"subscriptions","MOBILE_REVENUE":"GBP",
+                      "MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"GB"}[code]
+            _write(ctx,run_id,source_id,country,k[code],context,period,"quarterly",raw,unit,value,url,
+                   {"collector":"ofcom_csv_v2","row":ri,"column":ci,"source_value":raw,"source_unit_context":unit},currency)
+            written+=1
+        meta={"collector":"ofcom_csv_v2","rows":written,"period":period,"source_url":url}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
-        return {"rows_read":read,"rows_written":written,"url":url}
+        return {"rows_read":read,"rows_written":written,"period":period,"url":url}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v1"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v2"}); raise
