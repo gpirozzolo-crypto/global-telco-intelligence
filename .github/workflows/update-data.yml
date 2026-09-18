@@ -41,6 +41,7 @@ jobs:
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep-load
       - name: Load ARCEP FTTH deployment observations
+        continue-on-error: true
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep-deployment-load
       - name: Inspect AGCOM workbook
