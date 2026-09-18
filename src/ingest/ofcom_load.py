@@ -91,7 +91,9 @@ def _official_page_fallback(ctx):
     vals={}
     for code,p in patterns.items():
         m=re.search(p,text,re.I)
-        if not m:\n            sample=re.sub(r"\\s+"," ",text[:600])\n            raise RuntimeError(f"Official Ofcom page fallback missing {code}; relay_sample={sample!r}")
+        if not m:
+            sample=re.sub(r"\\s+"," ",text[:600])
+            raise RuntimeError(f"Official Ofcom page fallback missing {code}; relay_sample={sample!r}")
         vals[code]=float(m.group(1))
     return vals,mode
 
