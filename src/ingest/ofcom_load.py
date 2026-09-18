@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 from .base import PipelineContext, finish_run, one, start_run, utcnow
 from .regulator_load import _write
 
-PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"
+PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"\nLATEST_CSV="https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/telecoms-research/telecoms-data-updates/telecommunications-market-data/telecommunications-market-data-update-q1-2026.csv?v=422841"
 
 LABELS={
  "FIXED_BB_SUBS":[r"fixed broadband.*lines",r"fixed broadband connections"],
@@ -23,11 +23,16 @@ def _num(v):
     except:return None
 
 def _csv_url(ctx):
+    # Ofcom blocks the listing page from some automated runtimes while the
+    # official siteasset CSV remains directly downloadable. Try the canonical
+    # current official CSV first; page discovery remains the fallback.
+    probe=ctx.session.get(LATEST_CSV,timeout=45)
+    if probe.ok and probe.content:
+        return LATEST_CSV
     r=ctx.session.get(PAGE,timeout=45); r.raise_for_status()
     links=re.findall(r'href=["\']([^"\']+\.csv[^"\']*)',r.text,re.I)
     urls=[urljoin(r.url,x.replace("&amp;","&")) for x in links]
     if not urls: raise RuntimeError("Ofcom CSV link not found")
-    # Page is newest-first. Require Q1 2026 context rather than silently using an old file.
     q1=[u for u in urls if "2026" in u.lower() or "q1" in u.lower()]
     return q1[0] if q1 else urls[0]
 
