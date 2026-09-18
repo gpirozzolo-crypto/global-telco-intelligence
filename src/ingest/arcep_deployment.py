@@ -86,7 +86,7 @@ def _national_ftth_total(wb):
 
 
 def load_arcep_deployment(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v2"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v3"})
     read = written = 0
     try:
         country = one(ctx.db, "countries", "iso3", "FRA")
@@ -114,11 +114,11 @@ def load_arcep_deployment(ctx: PipelineContext) -> dict:
                "quality_flag": "ok", "retrieved_at": utcnow(),
                "quality_notes": "ARCEP locaux raccordables FTTH; explicit national total, not summed across zones/operators."}
         _upsert_obs(ctx, obs); written = 1
-        meta = {"collector": "arcep_deployment_v2", "period": period, "resource_id": res.get("id"), "source_url": url}
+        meta = {"collector": "arcep_deployment_v3", "period": period, "resource_id": res.get("id"), "source_url": url}
         finish_run(ctx, run_id, "success", read, written, metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(),
                                                "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, **meta}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v2"})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v3"})
         raise
