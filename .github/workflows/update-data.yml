@@ -51,6 +51,9 @@ jobs:
       - name: Load BNetzA raw and normalized observations
         env: *supabase_env
         run: python src/run_pipeline.py --source bnetza-load
+      - name: Load Ofcom raw and normalized observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source ofcom-load
       - name: Refresh calculated KPIs
         env: *supabase_env
         run: python src/run_pipeline.py --source calculated
