@@ -3,7 +3,8 @@ name: Update telco intelligence data
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'src/ingest/**'
       - 'src/run_pipeline.py'
