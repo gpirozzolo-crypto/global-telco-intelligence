@@ -12,6 +12,15 @@ from .base import PipelineContext, finish_run, one, start_run, utcnow
 ALIASES = {
     "CAPEX": ["Investment during the year (*)"],
     "MOBILE_SUBS": ["Total number of SIM cards (MtoM cards excluded)"],
+    # ARCEP electronic-communications workbooks can expose FttH retail stock.
+    # Keep aliases exact and fail closed: deployment/"locaux raccordables" data
+    # belongs to the separate HD/THD deployment dataset and must not be mapped here.
+    "FTTH_SUBS": [
+        "Number of FttH subscriptions",
+        "Number of subscriptions to FttH",
+        "Nombre d'abonnements FttH",
+        "Nombre d'abonnements en fibre optique de bout en bout (FttH)",
+    ],
 }
 
 
@@ -30,7 +39,7 @@ def _period(value, frequency):
 
 def _scale(unit):
     u = (unit or "").lower()
-    if "million" in u and ("unit" in u or "sim" in u): return 1_000_000.0
+    if "million" in u and ("unit" in u or "sim" in u or "subscription" in u or "abonnement" in u): return 1_000_000.0
     if "million" in u and ("€" in u or "eur" in u): return 1_000_000.0
     return 1.0
 
@@ -64,7 +73,7 @@ def _upsert_obs(ctx, payload):
 
 
 def load_arcep(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v2"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v3"})
     country = one(ctx.db, "countries", "iso3", "FRA")
     kpis = {k: one(ctx.db, "kpis", "code", k) for k in ALIASES}
     read = written = 0
@@ -112,10 +121,10 @@ def load_arcep(ctx: PipelineContext) -> dict:
                                    "definition_version": kpis[code]["definition_version"], "quality_flag": "ok",
                                    "retrieved_at": utcnow(), "quality_notes": f"ARCEP: {label}"}
                             _upsert_obs(ctx, obs); written += 1
-        meta = {"collector":"arcep_load_v2","matched":matched}
+        meta = {"collector":"arcep_load_v3","matched":matched}
         finish_run(ctx, run_id, "success", read, written, metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(), "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, "matched": matched}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v2","matched":matched})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v3","matched":matched})
         raise
