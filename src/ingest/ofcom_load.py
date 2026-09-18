@@ -5,7 +5,8 @@ from urllib.parse import urljoin
 from .base import PipelineContext, finish_run, one, start_run, utcnow
 from .regulator_load import _write
 
-PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"\nLATEST_CSV="https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/telecoms-research/telecoms-data-updates/telecommunications-market-data/telecommunications-market-data-update-q1-2026.csv?v=422841"
+PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"
+LATEST_CSV="https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/telecoms-research/telecoms-data-updates/telecommunications-market-data/telecommunications-market-data-update-q1-2026.csv?v=422841"
 
 LABELS={
  "FIXED_BB_SUBS":[r"fixed broadband.*lines",r"fixed broadband connections"],
