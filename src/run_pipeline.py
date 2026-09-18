@@ -12,6 +12,7 @@ from ingest.arcep_deployment import load_arcep_deployment
 from ingest.base import context
 from ingest.cnmc_load import load_cnmc
 from ingest.ofcom_load import load_ofcom
+from ingest.ofcom_connected_nations import load_ofcom_connected_nations
 from ingest.probe import SOURCES, probe
 from ingest.regulator_inspect import inspect_agcom, inspect_bnetza, inspect_cnmc
 from ingest.regulator_load import load_agcom, load_bnetza
@@ -44,6 +45,7 @@ def bnetza_inspect(): print(json.dumps({"source":"BNetzA_TK",**inspect_bnetza(co
 def agcom_load(): print(json.dumps({"source":"AGCOM_OBS",**load_agcom(context())}))
 def bnetza_load(): print(json.dumps({"source":"BNetzA_TK",**load_bnetza(context())}))
 def ofcom_load(): print(json.dumps({"source":"OFCOM_TELECOMS",**load_ofcom(context())}))
+def ofcom_fibre_load(): print(json.dumps({"source":"OFCOM_TELECOMS","dataset":"connected-nations",**load_ofcom_connected_nations(context())}))
 
 def calculated():
     sb = client()
@@ -59,7 +61,7 @@ def main():
     parser=argparse.ArgumentParser()
     funcs={"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load,"arcep-deployment-load":arcep_deployment_load,
            "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"cnmc-load":cnmc_load,"bnetza-inspect":bnetza_inspect,
-           "agcom-load":agcom_load,"bnetza-load":bnetza_load,"ofcom-load":ofcom_load,"calculated":calculated,"quality":quality}
+           "agcom-load":agcom_load,"bnetza-load":bnetza_load,"ofcom-load":ofcom_load,"ofcom-fibre-load":ofcom_fibre_load,"calculated":calculated,"quality":quality}
     parser.add_argument("--source",default="healthcheck",choices=list(funcs))
     args=parser.parse_args(); funcs[args.source]()
 
