@@ -33,6 +33,9 @@ jobs:
       - name: Load ARCEP raw and normalized observations
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep-load
+      - name: Load ARCEP FTTH deployment observations
+        env: *supabase_env
+        run: python src/run_pipeline.py --source arcep-deployment-load
       - name: Inspect AGCOM workbook
         env: *supabase_env
         run: python src/run_pipeline.py --source agcom-inspect
