@@ -71,22 +71,29 @@ def _extract(rows,code):
     return hits[0]
 
 def _official_page_fallback(ctx):
-    r=ctx.session.get(PAGE,timeout=45); r.raise_for_status()
+    # Ofcom may block cloud runners. A read-only text relay is used only as
+    # transport fallback; source lineage remains the canonical Ofcom page.
+    r=ctx.session.get(PAGE,timeout=45)
+    mode="official_page"
+    if not r.ok:
+        r=ctx.session.get(TEXT_RELAY,timeout=60)
+        r.raise_for_status()
+        mode="official_page_relay"
     text=re.sub(r"<[^>]+>"," ",r.text)
-    text=re.sub(r"\s+"," ",text)
+    text=re.sub(r"\\s+"," ",text)
     patterns={
-      "FIXED_BB_SUBS":r"There were\s+([0-9.]+)\s+million fixed broadband lines",
-      "MOBILE_SUBS":r"active mobile subscriptions \(excluding M2M\) was\s+([0-9.]+)\s+million",
-      "MOBILE_REVENUE":r"generated\s+£([0-9.]+)bn\s+in retail revenues",
-      "MOBILE_ARPU":r"Average monthly retail revenue per subscriber was\s+£([0-9.]+)",
-      "MOBILE_DATA_TRAFFIC":r"to\s+([0-9]+)\s+PB",
+      "FIXED_BB_SUBS":r"There were\\s+([0-9.]+)\\s+million fixed broadband lines",
+      "MOBILE_SUBS":r"active mobile subscriptions \\(excluding M2M\\) was\\s+([0-9.]+)\\s+million",
+      "MOBILE_REVENUE":r"generated\\s+£([0-9.]+)bn\\s+in retail revenues",
+      "MOBILE_ARPU":r"Average monthly retail revenue per subscriber was\\s+£([0-9.]+)",
+      "MOBILE_DATA_TRAFFIC":r"to\\s+([0-9]+)\\s+PB",
     }
     vals={}
     for code,p in patterns.items():
         m=re.search(p,text,re.I)
         if not m: raise RuntimeError(f"Official Ofcom page fallback missing {code}")
         vals[code]=float(m.group(1))
-    return vals
+    return vals,mode
 
 def load_ofcom(ctx: PipelineContext)->dict:
     source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v4"})
@@ -100,8 +107,8 @@ def load_ofcom(ctx: PipelineContext)->dict:
             extracted={code:_extract(rows,code) for code in codes}
             mode="csv"
         except Exception:
-            vals=_official_page_fallback(ctx)
-            period="2026-03-31"; url=PAGE; mode="official_page"
+            vals,mode=_official_page_fallback(ctx)
+            period="2026-03-31"; url=PAGE
             extracted={}
             units={"FIXED_BB_SUBS":"million subscriptions","MOBILE_SUBS":"million subscriptions","MOBILE_REVENUE":"GBP billion","MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"PB"}
             for code,val in vals.items(): extracted[code]=(None,None,val,units[code],f"Ofcom Q1 2026 official headline: {code}")
