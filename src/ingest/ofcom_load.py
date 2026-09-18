@@ -82,8 +82,8 @@ def _official_page_fallback(ctx):
     text=re.sub(r"<[^>]+>"," ",r.text)
     text=re.sub(r"\\s+"," ",text)
     patterns={
-      "FIXED_BB_SUBS":r"There were\\s+([0-9.]+)\\s+million fixed broadband lines",
-      "MOBILE_SUBS":r"active mobile subscriptions \\(excluding M2M\\) was\\s+([0-9.]+)\\s+million",
+      "FIXED_BB_SUBS":r"There (?:were|are)\\s+([0-9.]+)\\s+million fixed broadband lines",
+      "MOBILE_SUBS":r"(?:number of )?active mobile subscriptions \\(excluding M2M\\) was\\s+([0-9.]+)\\s+million",
       "MOBILE_REVENUE":r"generated\\s+£([0-9.]+)bn\\s+in retail revenues",
       "MOBILE_ARPU":r"Average monthly retail revenue per subscriber was\\s+£([0-9.]+)",
       "MOBILE_DATA_TRAFFIC":r"to\\s+([0-9]+)\\s+PB",
@@ -125,4 +125,4 @@ def load_ofcom(ctx: PipelineContext)->dict:
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"period":period,"url":url,"mode":mode}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v3"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v4"}); raise
