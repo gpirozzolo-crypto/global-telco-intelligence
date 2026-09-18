@@ -24,9 +24,6 @@ def _num(v):
     except:return None
 
 def _csv_url(ctx):
-    # Ofcom blocks the listing page from some automated runtimes while the
-    # official siteasset CSV remains directly downloadable. Try the canonical
-    # current official CSV first; page discovery remains the fallback.
     probe=ctx.session.get(LATEST_CSV,timeout=45)
     if probe.ok and probe.content:
         return LATEST_CSV
@@ -66,33 +63,58 @@ def _extract(rows,code):
         nums=[(ci,_num(x)) for ci,x in enumerate(cells)]
         nums=[x for x in nums if x[1] is not None]
         if not nums: continue
-        # Prefer the right-most numeric cell: Ofcom tables place latest period to the right.
         ci,val=nums[-1]
         unit=" ".join(cells[max(0,ci-2):min(len(cells),ci+3)])
         hits.append((ri+1,ci+1,val,unit,joined))
     if len(hits)!=1: raise RuntimeError(f"Expected one Ofcom row for {code}, found {len(hits)}")
     return hits[0]
 
+def _official_page_fallback(ctx):
+    r=ctx.session.get(PAGE,timeout=45); r.raise_for_status()
+    text=re.sub(r"<[^>]+>"," ",r.text)
+    text=re.sub(r"\s+"," ",text)
+    patterns={
+      "FIXED_BB_SUBS":r"There were\s+([0-9.]+)\s+million fixed broadband lines",
+      "MOBILE_SUBS":r"active mobile subscriptions \(excluding M2M\) was\s+([0-9.]+)\s+million",
+      "MOBILE_REVENUE":r"generated\s+£([0-9.]+)bn\s+in retail revenues",
+      "MOBILE_ARPU":r"Average monthly retail revenue per subscriber was\s+£([0-9.]+)",
+      "MOBILE_DATA_TRAFFIC":r"to\s+([0-9]+)\s+PB",
+    }
+    vals={}
+    for code,p in patterns.items():
+        m=re.search(p,text,re.I)
+        if not m: raise RuntimeError(f"Official Ofcom page fallback missing {code}")
+        vals[code]=float(m.group(1))
+    return vals
+
 def load_ofcom(ctx: PipelineContext)->dict:
-    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v2"})
+    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v3"})
     read=written=0; country=one(ctx.db,"countries","iso3","GBR")
     codes=list(LABELS); k={c:one(ctx.db,"kpis","code",c) for c in codes}
     try:
-        url=_csv_url(ctx); r=ctx.session.get(url,timeout=90); r.raise_for_status()
-        rows=list(csv.reader(io.StringIO(r.content.decode("utf-8-sig",errors="replace"))))
-        period=_period(rows)
+        try:
+            url=_csv_url(ctx); r=ctx.session.get(url,timeout=90); r.raise_for_status()
+            rows=list(csv.reader(io.StringIO(r.content.decode("utf-8-sig",errors="replace"))))
+            period=_period(rows)
+            extracted={code:_extract(rows,code) for code in codes}
+            mode="csv"
+        except Exception:
+            vals=_official_page_fallback(ctx)
+            period="2026-03-31"; url=PAGE; mode="official_page"
+            extracted={}
+            units={"FIXED_BB_SUBS":"million subscriptions","MOBILE_SUBS":"million subscriptions","MOBILE_REVENUE":"GBP billion","MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"PB"}
+            for code,val in vals.items(): extracted[code]=(None,None,val,units[code],f"Ofcom Q1 2026 official headline: {code}")
         for code in codes:
-            ri,ci,raw,unit,context=_extract(rows,code); read+=1
+            ri,ci,raw,unit,context=extracted[code]; read+=1
             value=_scale(raw,unit,code)
             currency="GBP" if code in {"MOBILE_REVENUE","MOBILE_ARPU"} else None
-            out_unit={"FIXED_BB_SUBS":"subscriptions","MOBILE_SUBS":"subscriptions","MOBILE_REVENUE":"GBP",
-                      "MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"GB"}[code]
+            out_unit={"FIXED_BB_SUBS":"subscriptions","MOBILE_SUBS":"subscriptions","MOBILE_REVENUE":"GBP","MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"GB"}[code]
             _write(ctx,run_id,source_id,country,k[code],context,period,"quarterly",raw,unit,value,url,
-                   {"collector":"ofcom_csv_v2","row":ri,"column":ci,"source_value":raw,"source_unit_context":unit},currency)
+                   {"collector":"ofcom_csv_v3","mode":mode,"row":ri,"column":ci,"source_value":raw,"source_unit_context":unit},currency)
             written+=1
-        meta={"collector":"ofcom_csv_v2","rows":written,"period":period,"source_url":url}
+        meta={"collector":"ofcom_csv_v3","mode":mode,"rows":written,"period":period,"source_url":url}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
-        return {"rows_read":read,"rows_written":written,"period":period,"url":url}
+        return {"rows_read":read,"rows_written":written,"period":period,"url":url,"mode":mode}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v2"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v3"}); raise
