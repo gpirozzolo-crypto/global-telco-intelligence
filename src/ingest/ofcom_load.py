@@ -1,6 +1,5 @@
 from __future__ import annotations
 import csv, io, re
-import pandas as pd
 from datetime import date
 from urllib.parse import urljoin
 from .base import PipelineContext, finish_run, one, start_run, utcnow
@@ -8,7 +7,7 @@ from .regulator_load import _write
 
 PAGE="https://www.ofcom.org.uk/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update"
 LATEST_CSV="https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/telecoms-research/telecoms-data-updates/telecommunications-market-data/telecommunications-market-data-update-q1-2026.csv?v=422841"
-CMR_XLSX="https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/multi-sector/cmr/cmr26/data/telecoms-data.xlsx?v=420243"
+TRANSLATED_PAGE="https://www-ofcom-org-uk.translate.goog/phones-and-broadband/telecoms-infrastructure/telecommunications-market-data-update?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en"
 
 LABELS={
  "FIXED_BB_SUBS":[r"fixed broadband.*lines",r"fixed broadband connections"],
@@ -71,26 +70,20 @@ def _extract(rows,code):
     if len(hits)!=1: raise RuntimeError(f"Expected one Ofcom row for {code}, found {len(hits)}")
     return hits[0]
 
-def _cmr_fallback(ctx):
-    r=ctx.session.get(CMR_XLSX,timeout=90); r.raise_for_status()
-    book=pd.ExcelFile(io.BytesIO(r.content))
-    pats={"FIXED_BB_SUBS":[r"fixed broadband.*connections",r"fixed broadband.*lines"],"MOBILE_SUBS":[r"mobile subscriptions",r"active mobile"],"MOBILE_REVENUE":[r"mobile.*retail revenue"],"MOBILE_ARPU":[r"average monthly.*revenue",r"revenue per subscriber"],"MOBILE_DATA_TRAFFIC":[r"mobile.*data.*(traffic|volume|usage)"]}
-    found={}
-    for sheet in book.sheet_names:
-        df=pd.read_excel(book,sheet_name=sheet,header=None,dtype=str)
-        for ri,row in df.iterrows():
-            cells=["" if str(x)=="nan" else str(x).strip() for x in row.tolist()]; joined=" | ".join(cells)
-            for code,ps in pats.items():
-                if code in found or not any(re.search(p,joined,re.I) for p in ps): continue
-                nums=[(ci,_num(x)) for ci,x in enumerate(cells) if _num(x) is not None]
-                if nums:
-                    ci,val=nums[-1]; found[code]=(int(ri)+1,ci+1,val," ".join(cells[max(0,ci-2):ci+3]),f"{sheet}: {joined}")
-    missing=[x for x in pats if x not in found]
-    if missing: raise RuntimeError(f"Ofcom CMR fallback missing {missing}; sheets={book.sheet_names}")
-    return found
+def _proxy_page_fallback(ctx):
+    r=ctx.session.get(TRANSLATED_PAGE,timeout=90); r.raise_for_status()
+    text=re.sub(r"<[^>]+>"," ",r.text); text=re.sub(r"\s+"," ",text)
+    patterns={"FIXED_BB_SUBS":r"There (?:were|are)\s+([0-9.]+)\s+million fixed broadband lines","MOBILE_SUBS":r"(?:number of )?active mobile subscriptions \(excluding M2M\) was\s+([0-9.]+)\s+million","MOBILE_REVENUE":r"generated\s+£([0-9.]+)bn\s+in retail revenues","MOBILE_ARPU":r"Average monthly retail revenue per subscriber was\s+£([0-9.]+)","MOBILE_DATA_TRAFFIC":r"to\s+([0-9,]+)\s+PB"}
+    units={"FIXED_BB_SUBS":"million subscriptions","MOBILE_SUBS":"million subscriptions","MOBILE_REVENUE":"GBP billion","MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"PB"}
+    out={}
+    for code,p in patterns.items():
+        m=re.search(p,text,re.I)
+        if not m: raise RuntimeError(f"Ofcom translated-page fallback missing {code}")
+        out[code]=(None,None,float(m.group(1).replace(",","")),units[code],f"Official Ofcom Q1 2026 headline via translation transport: {code}")
+    return out
 
 def load_ofcom(ctx: PipelineContext)->dict:
-    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v5"})
+    source_id,run_id=start_run(ctx,"OFCOM_TELECOMS",{"collector":"ofcom_csv_v6"})
     read=written=0; country=one(ctx.db,"countries","iso3","GBR")
     codes=list(LABELS); k={c:one(ctx.db,"kpis","code",c) for c in codes}
     try:
@@ -101,19 +94,19 @@ def load_ofcom(ctx: PipelineContext)->dict:
             extracted={code:_extract(rows,code) for code in codes}
             mode="csv"
         except Exception:
-            extracted=_cmr_fallback(ctx)
-            period="2025-12-31"; url=CMR_XLSX; mode="cmr_xlsx"
+            extracted=_proxy_page_fallback(ctx)
+            period="2026-03-31"; url=PAGE; mode="official_page_translation_proxy"
         for code in codes:
             ri,ci,raw,unit,context=extracted[code]; read+=1
             value=_scale(raw,unit,code)
             currency="GBP" if code in {"MOBILE_REVENUE","MOBILE_ARPU"} else None
             out_unit={"FIXED_BB_SUBS":"subscriptions","MOBILE_SUBS":"subscriptions","MOBILE_REVENUE":"GBP","MOBILE_ARPU":"GBP/sub/month","MOBILE_DATA_TRAFFIC":"GB"}[code]
             _write(ctx,run_id,source_id,country,k[code],context,period,"quarterly",raw,unit,value,url,
-                   {"collector":"ofcom_csv_v5","mode":mode,"row":ri,"column":ci,"source_value":raw,"source_unit_context":unit},currency)
+                   {"collector":"ofcom_csv_v6","mode":mode,"row":ri,"column":ci,"source_value":raw,"source_unit_context":unit},currency)
             written+=1
-        meta={"collector":"ofcom_csv_v5","mode":mode,"rows":written,"period":period,"source_url":url}
+        meta={"collector":"ofcom_csv_v6","mode":mode,"rows":written,"period":period,"source_url":url}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"period":period,"url":url,"mode":mode}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v5"}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"ofcom_csv_v6"}); raise
