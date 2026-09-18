@@ -10,6 +10,7 @@ from ingest.arcep_inspect import inspect_arcep_workbooks
 from ingest.arcep_load import load_arcep
 from ingest.base import context
 from ingest.cnmc_load import load_cnmc
+from ingest.ofcom_load import load_ofcom
 from ingest.probe import SOURCES, probe
 from ingest.regulator_inspect import inspect_agcom, inspect_bnetza, inspect_cnmc
 from ingest.regulator_load import load_agcom, load_bnetza
@@ -40,6 +41,7 @@ def cnmc_load(): print(json.dumps({"source":"CNMC_TELCO",**load_cnmc(context())}
 def bnetza_inspect(): print(json.dumps({"source":"BNetzA_TK",**inspect_bnetza(context())}))
 def agcom_load(): print(json.dumps({"source":"AGCOM_OBS",**load_agcom(context())}))
 def bnetza_load(): print(json.dumps({"source":"BNetzA_TK",**load_bnetza(context())}))
+def ofcom_load(): print(json.dumps({"source":"OFCOM_TELECOMS",**load_ofcom(context())}))
 
 def calculated():
     sb = client()
@@ -55,7 +57,7 @@ def main():
     parser=argparse.ArgumentParser()
     funcs={"healthcheck":healthcheck,"probes":probes,"arcep":arcep,"arcep-inspect":arcep_inspect,"arcep-load":arcep_load,
            "agcom-inspect":agcom_inspect,"cnmc-inspect":cnmc_inspect,"cnmc-load":cnmc_load,"bnetza-inspect":bnetza_inspect,
-           "agcom-load":agcom_load,"bnetza-load":bnetza_load,"calculated":calculated,"quality":quality}
+           "agcom-load":agcom_load,"bnetza-load":bnetza_load,"ofcom-load":ofcom_load,"calculated":calculated,"quality":quality}
     parser.add_argument("--source",default="healthcheck",choices=list(funcs))
     args=parser.parse_args(); funcs[args.source]()
 
