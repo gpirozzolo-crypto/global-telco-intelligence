@@ -55,7 +55,7 @@ def _national_ftth_total(wb):
     candidates = []
     for ci, raw_label in enumerate(periods):
         label = "" if raw_label is None else str(raw_label).strip()
-        if not re.fullmatch(r"20\\d{2} [TQ][1-4]", label, re.I):
+        if not re.fullmatch(r"20\d{2} [TQ][1-4]", label, re.I):
             continue
         if ci >= len(premises) or ci >= len(ftth_rate):
             continue
