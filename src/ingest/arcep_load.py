@@ -107,7 +107,9 @@ def load_arcep(ctx: PipelineContext) -> dict:
                     label = label_en or label_fr
                     for code, aliases in ALIASES.items():
                         if label_en not in aliases and label_fr not in aliases: continue
-                        unit = str(row[1]).strip() if len(row) > 1 and row[1] is not None else kpis[code]["unit"]
+                        unit_en = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+                        unit_fr = str(row[3]).strip() if len(row) > 3 and row[3] is not None else ""
+                        unit = unit_en or unit_fr or kpis[code]["unit"]
                         matched[code] = matched.get(code, 0) + 1
                         for ci in range(4, min(len(row), len(periods))):
                             period = periods[ci]; val = _safe_float(row[ci])
