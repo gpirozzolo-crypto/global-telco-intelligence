@@ -69,24 +69,12 @@ def _national_ftth_total(wb):
     unique = {(h[0], h[1], h[2], h[3]): h for h in hits}
     if len(unique) != 1:
         sample = [d for d in diagnostics if d["sheet"].lower() == "couverture"][:50]
-        if not sample:
-            # Diagnostic only: inspect likely fibre rows without mapping them.
-            for ws in wb.worksheets:
-                for ri, row in enumerate(ws.iter_rows(values_only=True)):
-                    cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
-                    joined = " | ".join(cells)
-                    if joined and re.search(r"(ftth|fibre|abonn|raccord|eligible|éligib)", joined, re.I):
-                        sample.append({"sheet": ws.title, "row": ri + 1, "context": joined[:500]})
-                        if len(sample) >= 20:
-                            break
-                if len(sample) >= 20:
-                    break
-        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; diagnostic rows={sample}")
+        if not sample:\n            # Diagnostic-only: inspect actual Couverture rows regardless of wording.\n            for ws in wb.worksheets:\n                if ws.title.lower() != "couverture":\n                    continue\n                for ri, row in enumerate(ws.iter_rows(values_only=True)):\n                    cells = [str(v).strip() for v in row if v is not None and str(v).strip()]\n                    if not cells:\n                        continue\n                    sample.append({"sheet": ws.title, "row": ri + 1, "context": " | ".join(cells)[:700]})\n                    if len(sample) >= 50:\n                        break\n        if not sample:\n            sample = [{"sheet": ws.title, "max_row": ws.max_row, "max_column": ws.max_column} for ws in wb.worksheets]\n        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; diagnostic rows={sample}")
     return next(iter(unique.values()))
 
 
 def load_arcep_deployment(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v4"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v5"})
     read = written = 0
     try:
         country = one(ctx.db, "countries", "iso3", "FRA")
@@ -114,11 +102,11 @@ def load_arcep_deployment(ctx: PipelineContext) -> dict:
                "quality_flag": "ok", "retrieved_at": utcnow(),
                "quality_notes": "ARCEP locaux raccordables FTTH; explicit national total, not summed across zones/operators."}
         _upsert_obs(ctx, obs); written = 1
-        meta = {"collector": "arcep_deployment_v4", "period": period, "resource_id": res.get("id"), "source_url": url}
+        meta = {"collector": "arcep_deployment_v5", "period": period, "resource_id": res.get("id"), "source_url": url}
         finish_run(ctx, run_id, "success", read, written, metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(),
                                                "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, **meta}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v4"})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v5"})
         raise
