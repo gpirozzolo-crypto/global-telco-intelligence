@@ -37,6 +37,9 @@ jobs:
       - name: Discover ARCEP resources
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep
+      - name: Inspect ARCEP workbook for FTTH labels
+        env: *supabase_env
+        run: python src/run_pipeline.py --source arcep-inspect
       - name: Load ARCEP raw and normalized observations
         env: *supabase_env
         run: python src/run_pipeline.py --source arcep-load
