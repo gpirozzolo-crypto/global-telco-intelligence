@@ -69,7 +69,21 @@ def _national_ftth_total(wb):
     unique = {(h[0], h[1], h[2], h[3]): h for h in hits}
     if len(unique) != 1:
         sample = [d for d in diagnostics if d["sheet"].lower() == "couverture"][:50]
-        if not sample:\n            # Diagnostic-only: inspect actual Couverture rows regardless of wording.\n            for ws in wb.worksheets:\n                if ws.title.lower() != "couverture":\n                    continue\n                for ri, row in enumerate(ws.iter_rows(values_only=True)):\n                    cells = [str(v).strip() for v in row if v is not None and str(v).strip()]\n                    if not cells:\n                        continue\n                    sample.append({"sheet": ws.title, "row": ri + 1, "context": " | ".join(cells)[:700]})\n                    if len(sample) >= 50:\n                        break\n        if not sample:\n            sample = [{"sheet": ws.title, "max_row": ws.max_row, "max_column": ws.max_column} for ws in wb.worksheets]\n        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; diagnostic rows={sample}")
+        if not sample:
+            # Diagnostic-only: inspect actual Couverture rows regardless of wording.
+            for ws in wb.worksheets:
+                if ws.title.lower() != "couverture":
+                    continue
+                for ri, row in enumerate(ws.iter_rows(values_only=True)):
+                    cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                    if not cells:
+                        continue
+                    sample.append({"sheet": ws.title, "row": ri + 1, "context": " | ".join(cells)[:700]})
+                    if len(sample) >= 50:
+                        break
+        if not sample:
+            sample = [{"sheet": ws.title, "max_row": ws.max_row, "max_column": ws.max_column} for ws in wb.worksheets]
+        raise RuntimeError(f"Expected one explicit national FTTH raccordable total, found {len(unique)}; diagnostic rows={sample}")
     return next(iter(unique.values()))
 
 
