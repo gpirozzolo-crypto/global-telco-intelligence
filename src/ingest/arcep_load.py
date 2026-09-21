@@ -18,6 +18,9 @@ ALIASES = {
     "FTTH_SUBS": [
         "Number of FttH subscriptions",
         "Number of subscriptions to FttH",
+        "Number of FttH broadband subscriptions",
+        "FttH broadband subscriptions",
+        "FttH subscriptions",
         "Nombre d'abonnements FttH",
         "Nombre d'abonnements en fibre optique de bout en bout (FttH)",
     ],
@@ -94,9 +97,11 @@ def load_arcep(ctx: PipelineContext) -> dict:
                 header_idx = 1 if frequency == "quarterly" else 2
                 periods = [_period(v, frequency) for v in rows[header_idx]]
                 for ri, row in enumerate(rows):
-                    label = str(row[0]).strip() if row and row[0] is not None else ""
+                    label_en = str(row[0]).strip() if row and row[0] is not None else ""
+                    label_fr = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+                    label = label_en or label_fr
                     for code, aliases in ALIASES.items():
-                        if label not in aliases: continue
+                        if label_en not in aliases and label_fr not in aliases: continue
                         unit = str(row[1]).strip() if len(row) > 1 and row[1] is not None else kpis[code]["unit"]
                         matched[code] = matched.get(code, 0) + 1
                         for ci in range(4, min(len(row), len(periods))):
