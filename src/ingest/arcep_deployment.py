@@ -67,14 +67,19 @@ def _national_ftth_total(wb):
     if not candidates:
         raise RuntimeError("No aligned ARCEP premises/FttH coverage quarter found in Couverture rows 4/7/21")
 
-    label, ci, p, rate = max(candidates, key=lambda x: _quarter(x[0]) or "")
-    value = round(p * rate)
-    context = f"{label}: France entière locaux={p}; taux éligibles FttH={rate}; derived raccordables={value}"
-    return ws.title, 21, ci + 1, value, context
+    series = []
+    for label, ci, p, rate in candidates:
+        period = _quarter(label)
+        if not period:
+            continue
+        value = round(p * rate)
+        context = f"{label}: France entière locaux={p}; taux éligibles FttH={rate}; derived raccordables={value}"
+        series.append((period, label, ci + 1, p, rate, value, context))
+    return ws.title, series
 
 
 def load_arcep_deployment(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v5"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_deployment_v6"})
     read = written = 0
     try:
         country = one(ctx.db, "countries", "iso3", "FRA")
@@ -85,28 +90,30 @@ def load_arcep_deployment(ctx: PipelineContext) -> dict:
         url = res.get("latest") or res.get("url")
         x = ctx.session.get(url, timeout=120); x.raise_for_status()
         wb = load_workbook(io.BytesIO(x.content), read_only=True, data_only=True)
-        sheet, row, col, value, label = _national_ftth_total(wb)
-        read = 1
-        raw = {
+        sheet, series = _national_ftth_total(wb)
+        for obs_period, period_label, col, premises_value, ftth_rate, value, label in series:
+            read += 1
+            raw = {
             "ingestion_run_id": run_id, "source_id": source_id, "country_id": country["id"], "operator_id": None,
-            "source_indicator": "Locaux raccordables FTTH - France", "period_date": period, "frequency": "quarterly",
+            "source_indicator": "Locaux raccordables FTTH - France", "period_date": obs_period, "frequency": "quarterly",
             "value_numeric": value, "unit_raw": "locaux raccordables", "source_url": url, "retrieved_at": utcnow(),
             "payload": {"dataset_id": dataset.get("id"), "resource_id": res.get("id"), "resource_title": res.get("title"),
-                        "sheet": sheet, "row": row, "column": col, "matched_context": label},
-            "source_record_key": f"{res.get('id')}:{sheet}:{row}:{col}"
+                        "sheet": sheet, "premises_row": 7, "ftth_rate_row": 21, "column": col, "period_label": period_label,
+                        "premises_value": premises_value, "ftth_rate": ftth_rate, "derived_value": value, "matched_context": label},
+            "source_record_key": f"{res.get('id')}:{sheet}:{period_label}:France entière:FTTH_RATE_X_PREMISES"
         }
-        raw_id = _upsert_raw(ctx, raw)
-        obs = {"kpi_id": kpi["id"], "country_id": country["id"], "operator_id": None, "period_date": period,
+            raw_id = _upsert_raw(ctx, raw)
+            obs = {"kpi_id": kpi["id"], "country_id": country["id"], "operator_id": None, "period_date": obs_period,
                "frequency": "quarterly", "value": value, "unit": "premises", "currency_code": None,
                "source_id": source_id, "raw_observation_id": raw_id, "definition_version": kpi["definition_version"],
                "quality_flag": "ok", "retrieved_at": utcnow(),
-               "quality_notes": "ARCEP locaux raccordables FTTH; explicit national total, not summed across zones/operators."}
-        _upsert_obs(ctx, obs); written = 1
+               "quality_notes": "ARCEP national FTTH-eligible premises derived from explicit France entière premises × explicit France entière FttH eligibility rate; no geographic/operator summation."}
+            _upsert_obs(ctx, obs); written += 1
         meta = {"collector": "arcep_deployment_v5", "period": period, "resource_id": res.get("id"), "source_url": url}
         finish_run(ctx, run_id, "success", read, written, metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(),
                                                "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, **meta}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v5"})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector": "arcep_deployment_v6"})
         raise
