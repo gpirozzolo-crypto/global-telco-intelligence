@@ -36,59 +36,41 @@ def _latest_workbook(dataset: dict):
 
 
 def _national_ftth_total(wb):
-    # ARCEP Couverture is a time-series table. Derive the national FttH
-    # raccordable count from the explicit France entière premises row and
-    # the explicit France entière FttH eligibility-rate row for the latest
-    # quarter. Do not sum geographic zones/operators.
+    # Couverture has a stable structural layout: quarterly headers on row 4,
+    # national premises on row 7, and national FttH eligibility on row 21.
+    # Read those explicit national series directly; never aggregate zones/operators.
     ws = next((s for s in wb.worksheets if s.title.lower() == "couverture"), None)
     if ws is None:
         raise RuntimeError("ARCEP Couverture sheet not found")
 
-    rows = list(ws.iter_rows(values_only=True))
-    periods = None
-    premises = None
-    ftth_rate = None
-    ftth_section = False
+    periods = [cell.value for cell in ws[4]]
+    premises = [cell.value for cell in ws[7]]
+    ftth_rate = [cell.value for cell in ws[21]]
 
-    for ri, row in enumerate(rows):
-        cells = ["" if v is None else str(v).strip() for v in row]
-        first = cells[0] if cells else ""
-        if periods is None and any(re.fullmatch(r"20\\d{2} [TQ][1-4]", x, re.I) for x in cells):
-            periods = cells
-        if any(str(v).strip().lower() == "nombre de locaux" for v in row if v is not None):
-            # The following France entière row is the national premises base.
-            for rr in rows[ri + 1:ri + 8]:
-                if str(rr[0]).strip().lower() == "france entière":
-                    premises = rr
-                    break
-        if any(str(v).strip().lower() == "taux de locaux éligibles au ftth" for v in row if v is not None):
-            ftth_section = True
-            continue
-        if ftth_section and first.lower() == "france entière":
-            ftth_rate = row
-            break
-
-    if periods is None or premises is None or ftth_rate is None:
-        raise RuntimeError("Could not locate ARCEP national premises/FttH coverage series in Couverture")
+    if str(premises[0]).strip().lower() != "france entière":
+        raise RuntimeError(f"Unexpected Couverture row 7 label: {premises[0]!r}")
+    if str(ftth_rate[0]).strip().lower() != "france entière":
+        raise RuntimeError(f"Unexpected Couverture row 21 label: {ftth_rate[0]!r}")
 
     candidates = []
-    for ci, label in enumerate(periods):
-        if not re.fullmatch(r"20\\d{2} [TQ][1-4]", label or "", re.I):
+    for ci, raw_label in enumerate(periods):
+        label = "" if raw_label is None else str(raw_label).strip()
+        if not re.fullmatch(r"20\\d{2} [TQ][1-4]", label, re.I):
             continue
         if ci >= len(premises) or ci >= len(ftth_rate):
             continue
         p = _safe_float(premises[ci])
         rate = _safe_float(ftth_rate[ci])
-        if p is not None and rate is not None and 0 <= rate <= 1:
+        if p is not None and rate is not None and p > 1_000_000 and 0 <= rate <= 1:
             candidates.append((label, ci, p, rate))
 
     if not candidates:
-        raise RuntimeError("No aligned ARCEP premises/FttH coverage quarter found")
+        raise RuntimeError("No aligned ARCEP premises/FttH coverage quarter found in Couverture rows 4/7/21")
 
     label, ci, p, rate = max(candidates, key=lambda x: _quarter(x[0]) or "")
     value = round(p * rate)
     context = f"{label}: France entière locaux={p}; taux éligibles FttH={rate}; derived raccordables={value}"
-    return ws.title, 0, ci + 1, value, context
+    return ws.title, 21, ci + 1, value, context
 
 
 def load_arcep_deployment(ctx: PipelineContext) -> dict:
