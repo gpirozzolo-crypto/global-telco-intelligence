@@ -81,7 +81,7 @@ def _upsert_obs(ctx, payload):
 
 
 def load_arcep(ctx: PipelineContext) -> dict:
-    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v3"})
+    source_id, run_id = start_run(ctx, "ARCEP_OBS", {"collector": "arcep_load_v4"})
     country = one(ctx.db, "countries", "iso3", "FRA")
     kpis = {k: one(ctx.db, "kpis", "code", k) for k in ALIASES}
     read = written = 0
@@ -116,6 +116,12 @@ def load_arcep(ctx: PipelineContext) -> dict:
                             if not period or val is None: continue
                             read += 1
                             numeric = val * _scale(unit)
+                            # Count KPIs represent physical units. ARCEP publishes some source
+                            # values in millions with more precision than one unit; normalize
+                            # the scaled observation to the nearest whole count while preserving
+                            # the original decimal source value in raw_observations.
+                            if code in ("MOBILE_SUBS", "FTTH_SUBS"):
+                                numeric = round(numeric)
                             raw = {
                                 "ingestion_run_id": run_id, "source_id": source_id, "country_id": country["id"], "operator_id": None,
                                 "source_indicator": label, "period_date": period, "frequency": frequency,
@@ -133,10 +139,10 @@ def load_arcep(ctx: PipelineContext) -> dict:
                                    "definition_version": kpis[code]["definition_version"], "quality_flag": "ok",
                                    "retrieved_at": utcnow(), "quality_notes": f"ARCEP: {label}"}
                             _upsert_obs(ctx, obs); written += 1
-        meta = {"collector":"arcep_load_v3","matched":matched}
+        meta = {"collector":"arcep_load_v4","matched":matched}
         finish_run(ctx, run_id, "success", read, written, metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id": source_id, "last_success_at": utcnow(), "last_attempt_at": utcnow(), "cursor_state": meta}).execute()
         return {"rows_read": read, "rows_written": written, "matched": matched}
     except Exception as exc:
-        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v3","matched":matched})
+        finish_run(ctx, run_id, "failed", read, written, str(exc)[:1000], {"collector":"arcep_load_v4","matched":matched})
         raise
