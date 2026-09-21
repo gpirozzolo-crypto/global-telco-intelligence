@@ -55,13 +55,13 @@ def _national_ftth_total(wb):
         first = cells[0] if cells else ""
         if periods is None and any(re.fullmatch(r"20\\d{2} [TQ][1-4]", x, re.I) for x in cells):
             periods = cells
-        if first == "Nombre de locaux":
+        if any(str(v).strip().lower() == "nombre de locaux" for v in row if v is not None):
             # The following France entière row is the national premises base.
             for rr in rows[ri + 1:ri + 8]:
                 if str(rr[0]).strip().lower() == "france entière":
                     premises = rr
                     break
-        if first.lower() == "taux de locaux éligibles au ftth":
+        if any(str(v).strip().lower() == "taux de locaux éligibles au ftth" for v in row if v is not None):
             ftth_section = True
             continue
         if ftth_section and first.lower() == "france entière":
