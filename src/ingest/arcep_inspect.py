@@ -27,7 +27,13 @@ def inspect_arcep_workbooks(ctx: PipelineContext) -> dict:
                 preview = []
                 for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 12), values_only=True):
                     preview.append([None if v is None else str(v)[:180] for v in row[:12]])
-                sheets.append({"title": ws.title, "rows": ws.max_row, "cols": ws.max_column, "preview": preview})
+                matches = []
+                for ri, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                    vals = ["" if v is None else str(v) for v in row[:4]]
+                    joined = " | ".join(vals)
+                    if any(term in joined.lower() for term in ("ftth", "fibre optique", "fiber")):
+                        matches.append({"row": ri, "values": vals})
+                sheets.append({"title": ws.title, "rows": ws.max_row, "cols": ws.max_column, "preview": preview, "ftth_matches": matches})
             inspected.append({"resource_id": resource.get("id"), "title": resource.get("title"),
                               "url": url, "bytes": len(response.content), "sheets": sheets})
         finish_run(ctx, run_id, "success", len(resources), 0, metadata={"collector": "arcep_xlsx_inspect_v1", "workbooks": inspected})
