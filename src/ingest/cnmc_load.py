@@ -72,6 +72,16 @@ def _matches(r, service, concept, filters):
     if r.get("servicio") != service or r.get("concepto") != concept or not _na(r.get("operador")): return False
     return all(r.get(k)==v for k,v in (filters or {}).items())
 
+def _operator_total(rows, field):
+    # Retail technology totals may be published only by operator. Sum exactly
+    # one mutually-exclusive row per named operator; never mix operator rows
+    # with an aggregate/N/A row.
+    named=[r for r in rows if not _na(r.get("operador")) and _num(r.get(field)) is not None]
+    labels=[str(r.get("operador")) for r in named]
+    if named and len(labels)==len(set(labels)):
+        return sum(_num(r[field]) for r in named), named, "sum:operator"
+    return None, [], None
+
 def _country_total(rows, field, filters):
     fixed=set((filters or {}).keys())
     dims=[d for d in DIMENSIONS if d not in fixed]
@@ -106,7 +116,7 @@ def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, cod
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v5"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v6"})
     country=one(ctx.db,"countries","iso3","ESP")
     codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
@@ -118,6 +128,11 @@ def load_cnmc(ctx: PipelineContext) -> dict:
             for period in periods:
                 rows=[r for r in markets if _period(r.get("trimestre"))==period and _matches(r,service,concept,filters)]
                 value,used,method=_country_total(rows,field,filters)
+                if value is None and code=="FTTH_SUBS":
+                    operator_rows=[r for r in markets if _period(r.get("trimestre"))==period
+                                   and r.get("servicio")==service and r.get("concepto")==concept
+                                   and all(r.get(a)==b for a,b in (filters or {}).items())]
+                    value,used,method=_operator_total(operator_rows,field)
                 if value is None:
                     skipped[code]=skipped.get(code,0)+1; continue
                 indicator=f"{service} | {concept}" + (" | "+";".join(f"{a}={b}" for a,b in filters.items()) if filters else "")
@@ -132,7 +147,7 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                 _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
                        "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
                 written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
-        meta={"collector":"cnmc_quarterly_load_v5","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
+        meta={"collector":"cnmc_quarterly_load_v6","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
