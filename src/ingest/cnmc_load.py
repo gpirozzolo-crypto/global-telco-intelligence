@@ -73,9 +73,9 @@ def _matches(r, service, concept, filters):
     return all(r.get(k)==v for k,v in (filters or {}).items())
 
 def _operator_total(rows, field):
-    # Retail technology totals may be published only by operator. Prefer the
-    # operator-specific metric when present; CNMC often leaves the national
-    # field blank on those rows.
+    # CNMC retail FTTH operator rows are split into mutually exclusive
+    # customer segments (Residencial / Negocios). Sum one value per
+    # operator+segment pair, while failing closed on any duplicate pair.
     named=[]
     for r in rows:
         if _na(r.get("operador")):
@@ -85,9 +85,9 @@ def _operator_total(rows, field):
             v=_num(r.get(f"{field}_por_operador"))
         if v is not None:
             named.append((r,v))
-    labels=[str(r.get("operador")) for r,_ in named]
-    if named and len(labels)==len(set(labels)):
-        return sum(v for _,v in named), [r for r,_ in named], "sum:operator"
+    keys=[(str(r.get("operador")), str(r.get("segmento"))) for r,_ in named]
+    if named and all(not _na(r.get("segmento")) for r,_ in named) and len(keys)==len(set(keys)):
+        return sum(v for _,v in named), [r for r,_ in named], "sum:operator+segment"
     return None, [], None
 
 def _country_total(rows, field, filters):
@@ -124,7 +124,7 @@ def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, cod
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v8"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v9"})
     country=one(ctx.db,"countries","iso3","ESP")
     codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
@@ -160,9 +160,9 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                 _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
                        "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
                 written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
-        meta={"collector":"cnmc_quarterly_load_v8","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}
+        meta={"collector":"cnmc_quarterly_load_v9","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v8","matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v9","matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}); raise
