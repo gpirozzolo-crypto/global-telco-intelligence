@@ -16,7 +16,7 @@ RULES = [
     ("MOBILE_SUBS", "Telefonía móvil", "Líneas", "lineas_o_accesos", None),
     ("FIXED_BB_SUBS", "Banda ancha fija minorista", "Líneas", "lineas_o_accesos", None),
     ("FTTH_SUBS", "Banda ancha fija minorista", "Líneas", "lineas_o_accesos", {"tecnologia_de_acceso":"FTTH"}),
-    ("FTTH_HOMES_PASSED", "Red de distribución", "Accesos", "lineas_o_accesos", {"tecnologia_de_acceso":"FTTH"}),
+    ("FTTH_HOMES_PASSED", "Red de distribución", "Accesos", "lineas_o_accesos", {"tecnologia_de_acceso":"FTTH","tipo_de_acceso_de_infraestructuras":"Acceso instalado"}),
     ("MOBILE_REVENUE", "Telefonía móvil", "Ingresos", "ingresos", None),
     ("FIXED_REVENUE", "Banda ancha fija minorista", "Ingresos", "ingresos", None),
     ("MOBILE_DATA_TRAFFIC", "Banda Ancha móvil", "Tráfico - datos", "trafico_de_datos", None),
@@ -106,7 +106,7 @@ def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, cod
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v4"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v5"})
     country=one(ctx.db,"countries","iso3","ESP")
     codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
@@ -132,7 +132,7 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                 _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
                        "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
                 written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
-        meta={"collector":"cnmc_quarterly_load_v4","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
+        meta={"collector":"cnmc_quarterly_load_v5","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
