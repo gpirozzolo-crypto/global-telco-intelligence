@@ -124,11 +124,11 @@ def _write(ctx, run_id, source_id, country, kpi, resource, source_url, rows, cod
     _upsert_obs(ctx,obs)
 
 def load_cnmc(ctx: PipelineContext) -> dict:
-    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v7"})
+    source_id,run_id=start_run(ctx,"CNMC_TELCO",{"collector":"cnmc_quarterly_load_v8"})
     country=one(ctx.db,"countries","iso3","ESP")
     codes={r[0] for r in RULES}|{"TELCO_REVENUE"}
     kpis={c:one(ctx.db,"kpis","code",c) for c in codes}
-    read=written=0; matched={}; skipped={}
+    read=written=0; matched={}; skipped={}; diagnostics={}
     try:
         markets=_records(ctx,MARKETS_RESOURCE); general=_records(ctx,GENERAL_RESOURCE); read=len(markets)+len(general)
         periods=sorted({_period(r.get("trimestre")) for r in markets if _period(r.get("trimestre"))})
@@ -141,6 +141,11 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                                    and r.get("servicio")==service and r.get("concepto")==concept
                                    and all(r.get(a)==b for a,b in (filters or {}).items())]
                     value,used,method=_operator_total(operator_rows,field)
+                    if value is None:
+                        diagnostics[period]=[
+                            {k:r.get(k) for k in ["_id","operador","unidades","lineas_o_accesos","lineas_o_accesos_por_operador",*DIMENSIONS] if not _na(r.get(k))}
+                            for r in operator_rows
+                        ]
                 if value is None:
                     skipped[code]=skipped.get(code,0)+1; continue
                 indicator=f"{service} | {concept}" + (" | "+";".join(f"{a}={b}" for a,b in filters.items()) if filters else "")
@@ -155,9 +160,9 @@ def load_cnmc(ctx: PipelineContext) -> dict:
                 _write(ctx,run_id,source_id,country,kpis["TELCO_REVENUE"],GENERAL_RESOURCE,GENERAL_URL,rows,"TELCO_REVENUE",
                        "Datos generales | Ingresos | total", "ingresos",value,"sum:tipo_de_mercado+tipo_de_ingreso")
                 written+=1; matched["TELCO_REVENUE"]=matched.get("TELCO_REVENUE",0)+1
-        meta={"collector":"cnmc_quarterly_load_v7","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped}
+        meta={"collector":"cnmc_quarterly_load_v8","resources":[MARKETS_RESOURCE,GENERAL_RESOURCE],"matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}
         finish_run(ctx,run_id,"success",read,written,metadata=meta)
         ctx.db.table("pipeline_state").upsert({"source_id":source_id,"last_success_at":utcnow(),"last_attempt_at":utcnow(),"cursor_state":meta}).execute()
         return {"rows_read":read,"rows_written":written,"matched":matched,"skipped":skipped}
     except Exception as exc:
-        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v7","matched":matched,"skipped":skipped}); raise
+        finish_run(ctx,run_id,"failed",read,written,str(exc)[:1000],{"collector":"cnmc_quarterly_load_v8","matched":matched,"skipped":skipped,"ftth_subs_diagnostics":diagnostics}); raise
